@@ -193,6 +193,37 @@ export const isRunLive = async (db: CoachDb, id: string): Promise<boolean> => {
   return rows[0]?.status === 'running';
 };
 
+/**
+ * Concurrent per-trace judge calls per wave. Sequential judging is unusably
+ * slow on the zero-config `claude-subscription` provider (~30s per call — a
+ * 20-trace run would blow the run timeout); small waves keep runs fast without
+ * hammering provider rate limits.
+ */
+const JUDGE_WAVE_SIZE = 4;
+
+/**
+ * Judge `items` in order-preserving waves of `JUDGE_WAVE_SIZE` concurrent
+ * calls: checks the run is still live before each wave (canceled/timed-out
+ * runs stop promptly) and publishes scanned-count progress after each.
+ * Returns results in input order — truncated if the run stopped mid-way.
+ */
+export const judgeInWaves = async <T, R>(
+  db: CoachDb,
+  runId: string,
+  items: T[],
+  judge: (item: T) => Promise<R>,
+): Promise<R[]> => {
+  const out: R[] = [];
+  await updateRunProgress(db, runId, 0, items.length);
+  for (let i = 0; i < items.length; i += JUDGE_WAVE_SIZE) {
+    if (!(await isRunLive(db, runId))) break;
+    const wave = await Promise.all(items.slice(i, i + JUDGE_WAVE_SIZE).map(judge));
+    out.push(...wave);
+    await updateRunProgress(db, runId, out.length, items.length);
+  }
+  return out;
+};
+
 // ── discovery pipeline ───────────────────────────────────────────────────────
 
 /** Default number of traces sampled per discovery run. */
@@ -220,16 +251,10 @@ export const runDiscovery = async (
       .orderBy(desc(traces.receivedAt), desc(traces.id))
       .limit(sampleSize);
 
-    // 2 — per-trace open-ended judge; collect all findings tagged with their trace id.
-    //     Publish progress after each trace so the UI can show "scanned N/M" (and
-    //     the developer can tell a slow run apart from a stuck one).
-    const findings: DiscoveredDeviation[] = [];
-    await updateRunProgress(db, opts.runId, 0, rows.length);
-    let scanned = 0;
-    for (const row of rows) {
-      // Cancel/timeout mid-run: the lock is already freed, so stop making LLM
-      // calls promptly rather than draining the rest of the sample + the budget.
-      if (!(await isRunLive(db, opts.runId))) break;
+    // 2 — per-trace open-ended judge (in concurrent waves; progress publishes
+    //     per wave so the UI can show "scanned N/M"); collect all findings
+    //     tagged with their trace id, in sample order.
+    const judged = await judgeInWaves(db, opts.runId, rows, async (row) => {
       const view = buildTraceView(row.raw, row.id);
       const block = renderTraceView(view, row.id);
       const { object } = await generateStructuredTracked(db, 'discovery', {
@@ -240,18 +265,17 @@ export const runDiscovery = async (
         temperature: 0,
         signal: opts.signal,
       });
-      for (const f of object.findings) {
-        findings.push({
-          traceId: row.id,
-          label: f.label,
-          description: f.description,
-          severity: f.severity,
-          evidence: f.evidence,
-        });
-      }
-      scanned += 1;
-      await updateRunProgress(db, opts.runId, scanned, rows.length);
-    }
+      return { traceId: row.id, found: object.findings };
+    });
+    const findings: DiscoveredDeviation[] = judged.flatMap((j) =>
+      j.found.map((f) => ({
+        traceId: j.traceId,
+        label: f.label,
+        description: f.description,
+        severity: f.severity,
+        evidence: f.evidence,
+      })),
+    );
 
     // Canceled/timed out while judging → skip the heavy clustering call (and
     // the persist below); the run's already finalized as errored.
