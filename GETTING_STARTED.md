@@ -1,13 +1,12 @@
 # Getting started with Glassray Coach
 
 Coach is a **local** trace debugger for AI agents — one command, one embedded
-database, zero cloud. This is the 3-minute first run. (For the bigger picture, see
-[the local-edition overview](../docs/coach-local-edition.md); for the full
-reference, [`README.md`](./README.md).)
+database, zero cloud. This is the 3-minute first run. (For the full reference —
+CLI, HTTP surface, env vars — see [`README.md`](./README.md).)
 
 ```mermaid
 flowchart LR
-  a["1 · Start Coach"] --> b["2 · Send a trace"] --> c["3 · See it live"] --> d["4 · Discover + evals"]
+  a["1 · Start Coach"] --> b["2 · Send a trace"] --> c["3 · See it live"] --> d["4 · Discover → fix → evals"]
 ```
 
 ---
@@ -21,34 +20,34 @@ flowchart LR
 
 ## 1 · Start Coach
 
-From the `coach/` folder:
-
 ```sh
-npm install
-npm run build:ui        # builds the dashboard (once)
-node bin/glassray.mjs    # starts everything — this is `glassray start`
+npx @glassray/coach
 ```
 
-You'll see:
+You'll see the connect block with everything you need:
 
 ```
-glassray is running
-  dashboard  http://127.0.0.1:5899/
-  ingest     http://127.0.0.1:5899/v1/traces
-  data dir   ~/.glassray
+  Glassray Coach is running
+
+    Dashboard  http://127.0.0.1:5899/
+    Ingest     http://127.0.0.1:5899/v1/traces
+    API key    glsk_local_…
 ```
 
-Open **http://127.0.0.1:5899** — you'll get a **"Waiting for traces"** screen with
-copy-paste recipes. Leave the server running.
+Your browser opens to a **"Waiting for traces"** screen with copy-paste recipes
+and that same key. Leave the server running.
 
-> Stuck? Run `node bin/glassray.mjs doctor` — it checks your Node version, the
+> Stuck? Run `npx @glassray/coach doctor` — it checks your Node version, the
 > port, and that the data directory is writable, with one-line fixes.
+>
+> Working from a clone instead? `npm install && npm run build:ui`, then
+> `node bin/glassray.mjs`.
 
 ---
 
 ## 2 · Send your first trace
 
-No agent wired up yet? Open a **second terminal** in `coach/` and run:
+No agent wired up yet? From a clone of this repo, open a **second terminal** and run:
 
 ```sh
 node examples/send-otlp.mjs
@@ -78,24 +77,29 @@ Back in the browser, the trace appears **instantly** (no refresh). Try this tour
 
 ---
 
-## 4 · Find & lock in problems
+## 4 · Find, fix & lock in problems
 
-This is the point of Coach — finding the *silent* ways your agent misbehaves.
+This is the point of Coach — finding the *silent* ways your agent misbehaves,
+then closing the loop on them.
 
 1. Go to **Deviations → Run discovery**. Coach's judge reads your traces and
    clusters the recurring failures into deviation types.
-2. Open one, click **Save as eval** — now it's a repeatable pass/fail check.
-   (You can also hit **Save as eval** straight from any trace's detail view.)
-3. Fix your agent, send fresh traces, and **Re-run** the eval — the pass rate
-   climbs, and anything that breaks a formerly-passing case is flagged as a
-   **regression**.
+2. Open one and click **Generate fix** — Coach writes a concrete fix as
+   instructions for your coding agent (what to grep for, which files, the exact
+   edits). **Copy** it into Claude Code / Cursor and let it apply the change.
+3. Click **Save as eval** — the deviation's rule is now a repeatable pass/fail
+   check. (You can also hit **Save as eval** straight from any trace's detail view.)
+4. Send fresh traces and **Re-run** the eval — the pass rate climbs, and anything
+   that breaks a formerly-passing case is flagged as a **regression**. Once it
+   passes, **Mark resolved** on the deviation.
 
 > **Discovery needs a model.** With Claude Code installed it uses your local
 > `~/.claude` automatically (zero config). Otherwise it falls back to a
 > deterministic **`mock`** provider — the loop *works*, but the analysis is a
-> placeholder. For real analysis without `~/.claude`, set a key:
+> placeholder. For real analysis without `~/.claude`, set a key (or pick a
+> provider on the dashboard's **Settings** page):
 > ```sh
-> GLASSRAY_LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-... node bin/glassray.mjs
+> GLASSRAY_LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-... npx @glassray/coach
 > ```
 
 ---
@@ -120,18 +124,18 @@ Your key is on the **"Waiting for traces"** screen, or from
 
 | Symptom | Fix |
 | --- | --- |
-| `port 5899 is in use` | Start on another port: `node bin/glassray.mjs --port 5900`. |
+| `port 5899 is in use` | Start on another port: `npx @glassray/coach --port 5900`. |
 | Traces don't appear | Check the bearer key matches, and the endpoint is `http://127.0.0.1:5899` (loopback only — remote hosts are refused by design). |
-| "LLM provider not ready" | You're on `mock` or missing a key — see the note in step 4. |
-| Something's wedged | `node bin/glassray.mjs doctor`, or wipe and restart: `node bin/glassray.mjs reset --yes`. |
+| "LLM provider not ready" | You're on `mock` or missing a key — see the note in step 4, or open **Settings**. |
+| Something's wedged | `npx @glassray/coach doctor`, or wipe and restart: `npx @glassray/coach reset --yes`. |
 
 ---
 
 ## Where to next
 
-- **Full walkthrough** (discover → codify → fix → prove no regression):
+- **Full walkthrough** (discover → fix → codify → prove no regression):
   [`examples/support-bot/README.md`](./examples/support-bot/README.md).
-- **Architecture & everything built:** [the local-edition overview](../docs/coach-local-edition.md).
 - **CLI, HTTP surface, env vars:** [`README.md`](./README.md).
 - **Use it from your editor:** register the MCP server so Claude Code / Cursor can
-  query your traces — `claude mcp add glassray -- node <path>/coach/bin/glassray.mjs mcp`.
+  query your traces and run the whole loop —
+  `claude mcp add glassray -- npx @glassray/coach mcp`.
