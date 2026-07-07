@@ -1,0 +1,2299 @@
+/* ============================================================================
+   Glassray Coach — warm-paper LIGHT theme (no framework, one file).
+   Mirrors the Glassray dashboard design system (apps/web/src/app/globals.css):
+   warm-paper surfaces, forest-green brand, a fixed left sidebar, and mono type
+   for ids / durations / tokens / code. Sectioned by comment banners.
+   ========================================================================== */
+
+/* ---------- Design tokens (verbatim from the Helix design system) ---------- */
+
+:root {
+  /* surfaces & text */
+  --background: #fefefe;
+  --foreground: #1a1a18;
+  --card: #fefefe;
+  --card-foreground: #1a1a18;
+  --muted: #f4f4f2;
+  --muted-foreground: #787872;
+  --subtle: #f3f3f3;
+
+  /* primary — warm near-black (buttons) */
+  --primary: #1a1a18;
+  --primary-foreground: #f5f1e8;
+
+  /* secondary / accent — neutral light surfaces */
+  --secondary: #f4f4f2;
+  --accent: #f3f3f3;
+
+  /* brand — forest green (the brand hit) */
+  --brand: #166534;
+  --brand-foreground: #f5f1e8;
+
+  /* acid — one restrained accent: live/current indicators only */
+  --acid: #ddff1a;
+  --acid-foreground: #1a1a18;
+
+  /* semantic */
+  --success: #166534;
+  --warning: #ffb347;
+  --destructive: #ff5f4d;
+
+  /* lines, inputs, focus ring */
+  --border: #d0d0ca;
+  --input: #d0d0ca;
+  --ring: #166534;
+
+  /* sidebar */
+  --sidebar: #f4f4f2;
+  --sidebar-border: #d0d0ca;
+
+  /* status dots */
+  --ok: #166534;
+  --error: #ff5f4d;
+  --null: #a8a8a2;
+
+  /* span-kind text accents — tuned to stay legible on a light background */
+  --kind-agent: #166534; /* brand green */
+  --kind-llm: #4f46e5; /* calm indigo */
+  --kind-tool: #b45309; /* readable amber */
+  --kind-span: #787872; /* muted */
+
+  /* waterfall bar fills — slightly more saturated than the badge text */
+  --bar-agent: #166534;
+  --bar-llm: #6366f1;
+  --bar-tool: #f59e0b;
+  --bar-span: #b8b8b2;
+  --bar-error: #ff5f4d;
+
+  /* radius — small, almost-square; sm/lg derive from it */
+  --radius: 0.375rem;
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-lg: calc(var(--radius) * 1.6);
+
+  /* very soft card shadow for the warm-paper surfaces */
+  --shadow-card: 0 1px 2px rgba(26, 26, 24, 0.04), 0 1px 3px rgba(26, 26, 24, 0.05);
+
+  /* airgap-safe font stacks — no Google Fonts, no network */
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  color-scheme: light;
+}
+
+/* ---------- Base ---------- */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+code,
+pre,
+.mono {
+  font-family: var(--font-mono);
+}
+
+.muted {
+  color: var(--muted-foreground);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* ---------- App shell: fixed left sidebar + scrolling main ---------- */
+
+.app {
+  min-height: 100vh;
+  display: flex;
+  align-items: stretch;
+}
+
+.main {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 1180px;
+  padding: 34px 40px 72px;
+}
+
+/* ---------- Sidebar ---------- */
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  flex: 0 0 240px;
+  width: 240px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 18px 14px 16px;
+  background: var(--sidebar);
+  border-right: 1px solid var(--sidebar-border);
+}
+
+.wordmark {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  font-size: 0.98rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+
+.wordmark-mark-img {
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+}
+
+.wordmark-accent {
+  color: var(--brand);
+}
+
+/* ---------- Sidebar nav ---------- */
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 22px;
+}
+
+.nav-tab {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 8px 10px;
+  font-size: 0.92rem;
+  color: var(--muted-foreground);
+  border-radius: var(--radius);
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
+}
+
+.nav-tab:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+.nav-tab-active {
+  background: var(--accent);
+  color: var(--foreground);
+  font-weight: 500;
+}
+
+.nav-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  color: currentColor;
+}
+
+/* the one restrained brand hit inside the nav — tint the active icon green */
+.nav-tab-active .nav-icon {
+  color: var(--brand);
+}
+
+/* ---------- Page headers ---------- */
+
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 22px;
+}
+
+.page-head-text {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.page-title {
+  margin: 0;
+  font-size: 1.6rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--foreground);
+}
+
+.page-sub {
+  margin: 0;
+  max-width: 62ch;
+  font-size: 0.9rem;
+  color: var(--muted-foreground);
+}
+
+.list-caption {
+  margin: -8px 0 14px;
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+}
+
+.list-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-top: 6px;
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+
+/* ---------- Notices ---------- */
+
+.notice {
+  padding: 22px;
+  color: var(--muted-foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+
+.notice-error {
+  color: var(--destructive);
+  border-color: rgba(255, 95, 77, 0.4);
+}
+
+/* ---------- Status dots ---------- */
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--null);
+}
+
+.dot-ok {
+  background: var(--ok);
+}
+
+.dot-error {
+  background: var(--error);
+}
+
+.dot-null {
+  background: var(--null);
+}
+
+/* ---------- Tags & kind badges ---------- */
+
+.tag {
+  display: inline-block;
+  padding: 2px 9px;
+  font-size: 0.72rem;
+  color: var(--foreground);
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 1px 8px;
+  font-size: 0.62rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+}
+
+.badge-agent {
+  color: var(--kind-agent);
+  background: rgba(22, 101, 52, 0.1);
+  border-color: rgba(22, 101, 52, 0.22);
+}
+
+.badge-llm {
+  color: var(--kind-llm);
+  background: rgba(79, 70, 229, 0.1);
+  border-color: rgba(79, 70, 229, 0.22);
+}
+
+.badge-tool {
+  color: var(--kind-tool);
+  background: rgba(180, 83, 9, 0.1);
+  border-color: rgba(180, 83, 9, 0.22);
+}
+
+.badge-span {
+  color: var(--kind-span);
+  background: var(--subtle);
+  border-color: var(--border);
+}
+
+/* ---------- Tables ---------- */
+
+.table-wrap {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  /* Scroll a wide table inside its card at narrow widths instead of clipping
+     the right-hand columns (Spans / Tokens) with no way to reach them. */
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  font-weight: 500;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground);
+  padding: 10px 16px;
+  background: var(--muted);
+  border-bottom: 1px solid var(--border);
+}
+
+.table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.col-status {
+  width: 20px;
+  text-align: center;
+}
+
+.col-num {
+  text-align: right;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+}
+
+.row {
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.row:hover {
+  background: var(--muted);
+}
+
+.cell-name {
+  display: block;
+  font-weight: 500;
+  color: var(--foreground);
+  /* Truncate long agent/chain names to one line so a verbose name can't make a
+     row tens of lines tall (the full name is on the detail page). */
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A table-cell name rendered as a real link (keyboard focus + cmd/middle-click). */
+.cell-link {
+  text-decoration: none;
+  color: var(--foreground);
+}
+.cell-link:hover {
+  text-decoration: underline;
+}
+
+.cell-preview {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  max-width: 440px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* the "N captured" live indicator — the one restrained --acid hit, ringed in
+   brand green so it reads on the warm-paper background */
+.live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--acid);
+  box-shadow: 0 0 0 2px rgba(22, 101, 52, 0.28);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+/* Stream dropped: a still, muted dot so the badge stops asserting liveness. */
+.live-dot-off {
+  background: var(--muted-foreground);
+  box-shadow: none;
+  animation: none;
+  opacity: 0.5;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* ---------- Empty states ---------- */
+
+.empty {
+  max-width: 620px;
+  margin: 56px auto;
+  padding: 40px 32px;
+  text-align: center;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.empty-pulse {
+  width: 44px;
+  height: 44px;
+  margin: 0 auto 20px;
+  border-radius: 50%;
+  background: rgba(22, 101, 52, 0.1);
+  position: relative;
+}
+
+.empty-pulse::after {
+  content: "";
+  position: absolute;
+  inset: 15px;
+  border-radius: 50%;
+  background: var(--brand);
+  animation: pulse 1.8s ease-in-out infinite;
+}
+
+.empty-title {
+  margin: 0 0 8px;
+  font-size: 1.2rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+
+.empty-sub {
+  margin: 0 auto 22px;
+  max-width: 460px;
+  color: var(--muted-foreground);
+}
+
+.empty-sub code,
+.empty-hint code {
+  padding: 1px 6px;
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--brand);
+}
+
+.empty-hint {
+  margin-top: 16px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.empty-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 18px;
+}
+
+.empty-actions .runbar {
+  align-items: center;
+}
+
+.empty-actions .runbar-hint,
+.empty-actions .runbar-error {
+  text-align: center;
+}
+
+/* ---------- Code block (empty-state OTLP snippet) ---------- */
+
+.codeblock {
+  position: relative;
+  text-align: left;
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.codeblock pre {
+  margin: 0;
+  /* Extra right padding so code never scrolls under the absolutely-positioned
+     Copy button (which overlaps the first line otherwise). */
+  padding: 16px 64px 16px 18px;
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--foreground);
+}
+
+.codeblock-copy {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  padding: 4px 11px;
+  font-size: 11px;
+  font-family: var(--font-sans);
+  color: var(--muted-foreground);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    color 0.1s ease,
+    border-color 0.1s ease;
+}
+
+.codeblock-copy:hover {
+  color: var(--brand);
+  border-color: var(--brand);
+}
+
+/* ---------- Detail header ---------- */
+
+.back {
+  display: inline-block;
+  margin-bottom: 18px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+  transition: color 0.1s ease;
+}
+
+.back:hover {
+  color: var(--brand);
+}
+
+.detail-head {
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.detail-title-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.detail-title {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--foreground);
+}
+
+.detail-sub {
+  margin: 0;
+  max-width: 720px;
+  color: var(--muted-foreground);
+}
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-card);
+}
+
+.stat {
+  padding: 12px 16px;
+  background: var(--card);
+}
+
+.stat-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground);
+  margin-bottom: 4px;
+}
+
+.stat-value {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+/* ---------- Detail body: waterfall + inspector ---------- */
+
+.detail-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  gap: 20px;
+  align-items: start;
+}
+
+.detail-tree {
+  min-width: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 8px;
+}
+
+/* ---------- Span tree / waterfall ---------- */
+
+.span-tree {
+  font-size: 13px;
+}
+
+.span-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 10px 5px 0;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background 0.08s ease;
+}
+
+.span-row:hover {
+  background: var(--muted);
+}
+
+.span-row-selected {
+  background: rgba(22, 101, 52, 0.08);
+}
+
+.span-caret {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.span-caret-empty {
+  cursor: default;
+}
+
+.span-name {
+  flex: 0 1 auto;
+  min-width: 90px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+
+.span-track {
+  flex: 1 1 auto;
+  position: relative;
+  height: 8px;
+  min-width: 60px;
+  background: var(--muted);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.span-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  border-radius: 4px;
+  min-width: 2px;
+}
+
+.span-bar-agent {
+  background: var(--bar-agent);
+}
+
+.span-bar-llm {
+  background: var(--bar-llm);
+}
+
+.span-bar-tool {
+  background: var(--bar-tool);
+}
+
+.span-bar-span {
+  background: var(--bar-span);
+}
+
+.span-bar-error {
+  background: var(--bar-error);
+}
+
+.span-duration {
+  flex: 0 0 auto;
+  width: 62px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+
+.span-children {
+  position: relative;
+}
+
+.span-children::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 8px;
+  left: 17px;
+  width: 1px;
+  background: var(--border);
+}
+
+/* ---------- Inspect panel ---------- */
+
+.inspect {
+  position: sticky;
+  top: 24px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+  padding: 16px;
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+}
+
+.inspect-empty {
+  color: var(--muted-foreground);
+}
+
+.inspect-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 12px;
+}
+
+.inspect-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Why an errored span failed (OTLP status.message). */
+.inspect-error {
+  margin: 0 0 12px;
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 8%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--destructive) 24%, var(--border));
+  border-radius: var(--radius-sm);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Collapsible raw span attributes at the bottom of the inspector. */
+.inspect-attrs {
+  margin-top: 14px;
+  font-size: 12px;
+}
+.inspect-attrs > summary {
+  cursor: pointer;
+  color: var(--muted-foreground);
+  user-select: none;
+}
+.attr-list {
+  margin: 10px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.attr-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 8px;
+}
+.attr-row dt {
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+.attr-row dd {
+  margin: 0;
+  color: var(--foreground);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.inspect-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.io + .io {
+  margin-top: 16px;
+}
+
+.io-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground);
+  margin-bottom: 6px;
+}
+
+.io-body {
+  margin: 0;
+  padding: 12px;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--foreground);
+}
+
+.io-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  background: var(--subtle);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* ---------- Panels & buttons ---------- */
+
+.panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-card);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 15px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-sans);
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    background 0.1s ease,
+    opacity 0.1s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: #2a2a26;
+}
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* light-background spinner: track from the paper button text, head opaque */
+.spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(245, 241, 232, 0.35);
+  border-top-color: var(--primary-foreground);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---------- Run bar ---------- */
+
+.runbar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.runbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.runbar-size {
+  width: 84px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+}
+
+.runbar-size:focus {
+  outline: none;
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px rgba(22, 101, 52, 0.15);
+}
+
+.runbar-hint {
+  margin: 0;
+  max-width: 340px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  text-align: right;
+}
+
+.runbar-error {
+  margin: 0;
+  max-width: 340px;
+  font-size: 12px;
+  color: var(--destructive);
+  text-align: right;
+}
+
+.runbar-hint code {
+  font-size: 11px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: var(--muted);
+}
+
+/* The post-run confirmation line, so a completed run is visible even when the result set is unchanged.
+   Uses --success (green) not --acid: acid (#ddff1a) is a background/accent pop and is unreadable as
+   text on the light paper surface. */
+.runbar-success {
+  margin: 0;
+  max-width: 360px;
+  font-size: 12px;
+  color: var(--success);
+  text-align: right;
+}
+
+/* ---------- Severity (deviations) ---------- */
+
+.sev {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px 2px 8px;
+  font-size: 0.66rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid transparent;
+  border-radius: 999px;
+}
+
+.sev::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sev-critical {
+  color: #d64534;
+  background: rgba(255, 95, 77, 0.1);
+  border-color: rgba(255, 95, 77, 0.28);
+}
+
+.sev-major {
+  color: var(--kind-tool);
+  background: rgba(255, 179, 71, 0.16);
+  border-color: rgba(255, 179, 71, 0.4);
+}
+
+.sev-minor {
+  color: var(--muted-foreground);
+  background: var(--subtle);
+  border-color: var(--border);
+}
+
+.col-sev {
+  width: 96px;
+  white-space: nowrap;
+}
+
+/* ---------- Rule callout (deviation detail) ---------- */
+
+.callout {
+  margin-top: 14px;
+  padding: 12px 16px;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--brand);
+  border-radius: var(--radius-sm);
+}
+
+.callout-label {
+  margin-bottom: 4px;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted-foreground);
+}
+
+.callout-body {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---------- Examples (deviation detail) ---------- */
+
+.section-title {
+  margin: 0 0 12px;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+
+.example-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.example {
+  padding: 14px 16px;
+}
+
+.example-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.example-label {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  color: var(--foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.example-link {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--muted-foreground);
+  transition: color 0.1s ease;
+}
+
+.example-link:hover {
+  color: var(--brand);
+}
+
+.example-desc {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+
+.evidence {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--foreground);
+  background: var(--subtle);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+}
+
+/* ---------- Self-healing loop: fix generation ---------- */
+
+/* Section title with its run control on the right (Fix / Generate fix). */
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 28px 0 12px;
+}
+
+.section-head .section-title {
+  margin: 0;
+  align-self: center;
+}
+
+/* Green "resolved" chip, matching the .sev pill shape. */
+.sev-resolved {
+  color: var(--success);
+  background: rgba(22, 101, 52, 0.1);
+  border-color: rgba(22, 101, 52, 0.28);
+}
+
+.fix-panel {
+  padding: 16px 18px;
+}
+
+.fix-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 12px;
+}
+
+/* Compact secondary button (Copy) — lighter than the primary .btn. */
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--foreground);
+  background: var(--card);
+  border-color: var(--border);
+}
+
+.btn-sm:hover:not(:disabled) {
+  background: var(--subtle);
+}
+
+.fix-md {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.fix-block {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fix-h {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+
+.fix-body {
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--foreground);
+  font-family: var(--font-mono);
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 900px) {
+  .sidebar {
+    flex-basis: 200px;
+    width: 200px;
+  }
+
+  .main {
+    padding: 28px 24px 64px;
+  }
+
+  .detail-body {
+    grid-template-columns: 1fr;
+  }
+
+  .inspect {
+    position: static;
+    max-height: none;
+  }
+
+  .cell-preview {
+    display: none;
+  }
+
+  .page-head {
+    flex-direction: column;
+  }
+
+  .page-head .runbar {
+    align-items: flex-start;
+  }
+
+  .page-head .runbar-hint,
+  .page-head .runbar-error {
+    text-align: left;
+  }
+}
+
+/* ── Trace list: stats strip + filter bar (M4) ──────────────────────────────
+   A compact rollup band above the table (tokens / cost / latency) and the
+   search + agent + errors-only filters, in the warm-paper card idiom. */
+.stats-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  margin-bottom: 0.75rem;
+}
+.stat-cell {
+  flex: 1 1 8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.6rem 0.85rem;
+  background: var(--card);
+}
+.stat-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+.stat-value {
+  font-size: 0.95rem;
+  color: var(--foreground);
+}
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.filter-search {
+  flex: 1 1 16rem;
+  min-width: 10rem;
+  padding: 0.4rem 0.65rem;
+  font: inherit;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+}
+.filter-search:focus,
+.filter-select:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: -1px;
+}
+.filter-select {
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+}
+.filter-toggle,
+.filter-clear {
+  padding: 0.4rem 0.75rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+  background: var(--card);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.filter-toggle:hover:not(.filter-toggle-active),
+.filter-clear:hover {
+  background: var(--muted);
+}
+.filter-toggle-active {
+  color: var(--destructive);
+  border-color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 8%, var(--card));
+}
+.filter-clear {
+  color: var(--muted-foreground);
+  border-color: transparent;
+}
+/* Error rows get a faint red wash + a left accent so failures stand out. */
+.row-error td {
+  background: color-mix(in srgb, var(--destructive) 5%, var(--card));
+}
+.row-error td:first-child {
+  box-shadow: inset 2px 0 0 var(--destructive);
+}
+
+/* ── Empty-state instrumentation recipes (M5 on-ramp) ───────────────────────── */
+.recipes {
+  width: 100%;
+  max-width: 40rem;
+  text-align: left;
+}
+.recipe-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.recipe-tab {
+  padding: 0.35rem 0.7rem;
+  font: inherit;
+  font-size: 0.82rem;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.recipe-tab:hover:not(.recipe-tab-active) {
+  background: var(--muted);
+}
+.recipe-tab-active {
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border-color: var(--primary);
+}
+
+/* ── Evals: deviations → repeatable checks (M6) ─────────────────────────────
+   A pass/fail rollup per saved rule, a regression watch, and a per-trace
+   verdict table — all in the warm-paper card idiom. */
+.inline-link {
+  color: var(--brand);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* List: latest-result proportion bar + health badge. */
+.col-bar {
+  width: 9rem;
+}
+.eval-bar {
+  display: flex;
+  height: 8px;
+  width: 100%;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--muted);
+}
+.eval-bar-pass {
+  background: var(--success);
+}
+.eval-bar-fail {
+  background: var(--destructive);
+}
+.eval-health {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.eval-health-idle {
+  color: var(--muted-foreground);
+  background: var(--muted);
+}
+.eval-health-pass {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, var(--card));
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+}
+.eval-health-fail {
+  color: var(--kind-tool);
+  background: color-mix(in srgb, var(--warning) 16%, var(--card));
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+.eval-health-regress {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 10%, var(--card));
+  border-color: color-mix(in srgb, var(--destructive) 35%, transparent);
+}
+
+/* New-eval inline form. */
+.new-eval {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+.new-eval-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.new-eval-label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+.new-eval-input {
+  padding: 0.45rem 0.65rem;
+  font: inherit;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+}
+.new-eval-input:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: -1px;
+}
+.new-eval-textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+}
+.new-eval-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Detail: source badge, action row, summary stats, verdict table. */
+.detail-title-action {
+  margin-left: auto;
+}
+.eval-source {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  color: var(--muted-foreground);
+  background: var(--muted);
+}
+.eval-source-deviation {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 10%, var(--card));
+}
+/* When the source badge links back to its originating deviation. */
+.eval-source-link {
+  text-decoration: none;
+}
+.eval-source-link:hover {
+  background: color-mix(in srgb, var(--brand) 18%, var(--card));
+}
+.eval-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+.btn-danger {
+  color: var(--destructive);
+  background: transparent;
+  border-color: var(--input);
+}
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--destructive) 8%, var(--card));
+  border-color: var(--destructive);
+}
+.eval-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.5rem;
+  padding: 0.85rem 1.1rem;
+  margin: 1.25rem 0 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+}
+.eval-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.eval-stat-value {
+  font-size: 1.35rem;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  color: var(--foreground);
+  line-height: 1.1;
+}
+.eval-stat-fail {
+  color: var(--destructive);
+}
+.eval-stat-regress {
+  color: var(--destructive);
+}
+.eval-stat-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+.eval-summary-when {
+  margin-left: auto;
+  font-size: 0.8rem;
+}
+.col-verdict {
+  width: 7.5rem;
+  white-space: nowrap;
+}
+.verdict {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-radius: var(--radius);
+}
+.verdict-pass {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, var(--card));
+}
+.verdict-fail {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 12%, var(--card));
+}
+.regress-tag {
+  margin-left: 0.4rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  color: var(--destructive);
+}
+.eval-evidence {
+  font-size: 0.85rem;
+  color: var(--muted-foreground);
+}
+
+/* ── Replay: LLM-span debugger (M7) ─────────────────────────────────────────
+   A full-height modal — editable request on the left, original vs replay
+   output on the right — opened from an LLM span's inspector. */
+.btn-block {
+  width: 100%;
+  justify-content: center;
+}
+.inspect-replay {
+  margin-bottom: 0.75rem;
+}
+.modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2.5vh 2.5vw;
+  background: color-mix(in srgb, var(--foreground) 42%, transparent);
+  backdrop-filter: blur(2px);
+}
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(1100px, 95vw);
+  max-height: 95vh;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 24px 60px -12px color-mix(in srgb, var(--foreground) 35%, transparent);
+  overflow: hidden;
+}
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.85rem 1.1rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--muted);
+}
+.modal-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+.modal-title {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.modal-close {
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.35rem 0.5rem;
+  color: var(--muted-foreground);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.modal-close:hover {
+  background: var(--card);
+  border-color: var(--border);
+}
+.replay-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1px;
+  flex: 1;
+  min-height: 0;
+  background: var(--border);
+}
+.replay-col {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem;
+  background: var(--card);
+  overflow-y: auto;
+}
+.replay-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.replay-field-grow {
+  flex: 1;
+  min-height: 0;
+}
+.replay-field-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+.replay-label {
+  font-size: 0.72rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+.replay-input {
+  padding: 0.4rem 0.6rem;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+}
+.replay-input:focus {
+  outline: 2px solid var(--ring);
+  outline-offset: -1px;
+}
+.replay-field-row .replay-input {
+  flex: 1;
+}
+.replay-temp {
+  flex: 0 0 4.5rem !important;
+}
+.replay-textarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+.replay-system {
+  min-height: 3.5rem;
+}
+.replay-prompt {
+  min-height: 10rem;
+  height: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.replay-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+/* "runs via {provider}" — sets expectation before the call about which backend actually serves the replay. */
+.replay-provider {
+  font-size: 0.72rem;
+}
+.replay-outputs {
+  background: var(--card);
+}
+.replay-output {
+  flex: 1;
+  min-height: 6rem;
+  margin: 0;
+  padding: 0.7rem 0.85rem;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--muted);
+}
+.replay-output-new {
+  border-color: color-mix(in srgb, var(--brand) 40%, var(--border));
+  background: color-mix(in srgb, var(--brand) 5%, var(--card));
+}
+.replay-meta {
+  font-size: 0.72rem;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--muted-foreground);
+}
+@media (max-width: 720px) {
+  .replay-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Alive UI: charts + overview dashboard (M8) ─────────────────────────────
+   Dependency-free CSS charts (brand green + reserved status colors, each paired
+   with a label) and the Overview dashboard cards. */
+
+/* Shared card chrome. */
+.card-pad {
+  padding: 1rem 1.1rem;
+}
+.card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+.card-title {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.card-link {
+  font-size: 0.8rem;
+  color: var(--brand);
+}
+.card-link:hover {
+  text-decoration: underline;
+}
+.card-empty {
+  padding: 0.5rem 0;
+}
+/* A one-line clarifier under a card title (e.g. distinguishing Coach's own spend from traced-agent cost). */
+.card-subtitle {
+  margin: -0.4rem 0 0.75rem;
+  font-size: 0.78rem;
+}
+
+/* Activity bar chart (trace volume over time; error share highlighted). */
+.chart {
+  width: 100%;
+}
+.chart-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  width: 100%;
+}
+.chart-col {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  cursor: default;
+}
+.chart-bar {
+  position: relative;
+  width: 100%;
+  min-height: 2px;
+  background: var(--brand);
+  border-radius: 2px 2px 0 0;
+  opacity: 0.85;
+  transition: opacity 0.1s ease;
+}
+.chart-col:hover .chart-bar {
+  opacity: 1;
+}
+.chart-bar-err {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--destructive);
+  border-radius: 0 0 2px 2px;
+}
+.chart-axis {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.35rem;
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+}
+.chart-empty {
+  width: 100%;
+  align-self: center;
+  text-align: center;
+  color: var(--muted-foreground);
+  font-size: 0.85rem;
+}
+.chart-empty-inline {
+  padding: 0.75rem 0;
+}
+
+/* Severity distribution bar + legend. */
+.sevbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.sevbar-track {
+  display: flex;
+  gap: 2px;
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--muted);
+}
+.sevbar-seg {
+  height: 100%;
+}
+.sevbar-empty {
+  width: 100%;
+  background: var(--muted);
+}
+.sev-seg-critical {
+  background: var(--destructive);
+}
+.sev-seg-major {
+  background: var(--warning);
+}
+.sev-seg-minor {
+  background: var(--null);
+}
+.sevbar-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-size: 0.78rem;
+  color: var(--muted-foreground);
+}
+.sevbar-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.sevbar-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+/* Eval pass-rate trend (per-run columns; red cap on any failure). */
+.trend {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+}
+.trend-col {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 28px;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  cursor: default;
+}
+.trend-fill {
+  position: relative;
+  width: 100%;
+  min-height: 2px;
+  background: var(--success);
+  border-radius: 2px 2px 0 0;
+  opacity: 0.85;
+}
+.trend-col:hover .trend-fill {
+  opacity: 1;
+}
+.trend-cap {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--destructive);
+  border-radius: 2px 2px 0 0;
+}
+
+/* Overview dashboard layout. */
+.overview {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.activity-card .chart-bars {
+  height: 72px;
+}
+.kpi-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: var(--border);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.kpi {
+  flex: 1 1 7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.7rem 0.9rem;
+  background: var(--card);
+}
+.kpi-value {
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.kpi-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+.overview-cols {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 800px) {
+  .overview-cols {
+    grid-template-columns: 1fr;
+  }
+}
+.mini-list {
+  display: flex;
+  flex-direction: column;
+}
+.mini-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+}
+.mini-list li:first-child .mini-row {
+  border-top: none;
+}
+.mini-row:hover {
+  background: var(--muted);
+}
+.mini-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+}
+/* The muted input preview on a recent-traces row — shrinks first so name + age keep their space. */
+.mini-preview {
+  flex: 2 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.mini-age {
+  flex: 0 0 auto;
+}
+.mini-row-error .mini-name {
+  color: var(--destructive);
+}
+.eval-health-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.overview-foot {
+  font-size: 0.78rem;
+}
+.sev-card {
+  margin-bottom: 0.75rem;
+}
+.trend-card .trend {
+  height: 56px;
+}
+
+/* Traces: Load more. */
+.load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 1rem;
+}
+.btn-ghost {
+  color: var(--foreground);
+  background: var(--card);
+  border-color: var(--input);
+}
+.btn-ghost:hover:not(:disabled) {
+  background: var(--muted);
+}
+
+/* ── Save-as-eval dialog (trace → repeatable check) ─────────────────────────
+   Reachable from a trace's header, so the discover→eval loop can start from the
+   debugger, not only from a full discovery run. */
+.detail-head-action {
+  margin-left: auto;
+}
+.save-eval-modal {
+  width: min(560px, 95vw);
+}
+.save-eval-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 18px;
+  overflow-y: auto;
+}
+.save-eval-evidence {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.save-eval-pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--foreground);
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.save-eval-pre-label {
+  display: block;
+  margin-bottom: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+  opacity: 0.75;
+}
+.save-eval-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* ── Settings page (provider / models / spend cap) ──────────────────────────
+   Configure the analysis backend from the dashboard, no restart. */
+.nav-tab-bottom {
+  margin-top: auto;
+}
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 22px;
+  max-width: 720px;
+}
+.settings-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.settings-field-narrow {
+  max-width: 340px;
+}
+.settings-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--foreground);
+}
+.settings-input {
+  padding: 9px 11px;
+  font-size: 14px;
+  color: var(--foreground);
+  background: var(--card);
+  border: 1px solid var(--input);
+  border-radius: var(--radius);
+}
+.settings-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.settings-input:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 1px;
+}
+.settings-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.settings-hint-warn {
+  color: #b45309;
+}
+.settings-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.settings-status {
+  font-size: 13px;
+  color: var(--muted-foreground);
+}
+.settings-status-ok {
+  color: var(--success);
+}
+.settings-status-warn {
+  color: #b45309;
+}
+
+/* ── LLM usage + budget meter (M9) ──────────────────────────────────────────
+   Coach's own metered spend vs the cap, plus a per-model breakdown. */
+.card-link-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0;
+}
+.card-link-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.budget {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.budget-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+.budget-spent {
+  font-size: 1.3rem;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.budget-track {
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--muted);
+}
+.budget-fill {
+  height: 100%;
+  background: var(--success);
+  border-radius: 999px;
+  transition: width 0.2s ease;
+  min-width: 2px;
+}
+.budget-fill-warn {
+  background: var(--warning);
+}
+.budget-fill-over {
+  background: var(--destructive);
+}
+.budget-warn {
+  font-size: 0.82rem;
+  color: var(--destructive);
+}
+.budget-note {
+  font-size: 0.82rem;
+}
+.usage-wrap {
+  margin-top: 0.25rem;
+}
+.usage-table th,
+.usage-table td {
+  padding-top: 0.4rem;
+  padding-bottom: 0.4rem;
+}

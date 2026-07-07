@@ -1,0 +1,64 @@
+{
+  "name": "@glassray/coach",
+  "version": "0.1.0",
+  "description": "Glassray Coach — a fully self-contained local AI-agent trace viewer (OTLP in, dashboard out).",
+  "type": "module",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=20.6"
+  },
+  "bin": {
+    "glassray": "bin/glassray.mjs"
+  },
+  "files": [
+    "bin",
+    "server",
+    "!server/**/*.test.ts",
+    "web/dist",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "dev": "tsx watch server/index.ts",
+    "dev:ui": "vite web",
+    "build:ui": "vite build web",
+    "start": "tsx server/index.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && npm run typecheck:web",
+    "typecheck:web": "tsc -p web/tsconfig.json --noEmit",
+    "test:egress": "node test/egress-proof.mjs",
+    "prepack": "vite build web"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/openai": "^3.0.0",
+    "@electric-sql/pglite": "0.5.4",
+    "@electric-sql/pglite-pgvector": "0.0.5",
+    "@fastify/static": "^9.1.3",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "ai": "^6.0.0",
+    "drizzle-orm": "^0.45.2",
+    "fastify": "^5.9.0",
+    "tsx": "^4.22.5",
+    "zod": "^4.4.3"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.152"
+  },
+  "devDependencies": {
+    "@glassray/tracing": "^0.1.1",
+    "@types/node": "^24.13.2",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^6.0.3",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "typescript": "^6.0.0",
+    "vite": "^8.1.3",
+    "vitest": "^4.1.9"
+  }
+}

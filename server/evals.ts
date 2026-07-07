@@ -1,0 +1,338 @@
+import { and, desc, eq, sql } from 'drizzle-orm';
+import { z } from 'zod';
+import type { CoachDb } from './bootstrap.js';
+import { finishRun, failRun, isRunLive, renderTraceView, updateRunProgress } from './discovery.js';
+import { generateStructuredTracked } from './usage.js';
+import { newId } from './ids.js';
+import { deviations, evalResults, evals, runs, traces } from './schema.js';
+import { buildTraceView } from './vendor/index.js';
+
+/*
+ * Local EVALS — turn a discovered deviation (or a hand-written rule) into a
+ * repeatable pass/fail check. Each eval carries one plain-language `rule`; a run
+ * samples recent traces and asks the model, per trace, whether the trace
+ * COMPLIES with the rule (pass) or VIOLATES it (fail). Verdicts are stored per
+ * (eval, run, trace) so the Evals view can show pass/fail counts and flag
+ * regressions — traces that passed last run and now fail.
+ */
+
+/** Judge system prompt for a single-rule eval — strict and scoped to the one rule. */
+const EVAL_SYSTEM_PROMPT =
+  'You are a strict evaluator of agent execution traces. You are given ONE rule the agent should follow and a single trace. Decide only whether this trace COMPLIES with the rule (pass) or VIOLATES it (fail). Judge against the rule alone — ignore unrelated quality issues. Always cite specific evidence from the trace.';
+
+/** Per-trace eval verdict returned by the model. */
+const EvalVerdictSchema = z.object({
+  verdict: z
+    .enum(['pass', 'fail'])
+    .describe('pass = the trace complies with the rule; fail = the trace violates the rule'),
+  evidence: z
+    .string()
+    .describe('Quote or cite the specific part of the trace that justifies the verdict'),
+});
+
+/** Default number of traces scored per eval run. */
+const DEFAULT_EVAL_SAMPLE = 20;
+
+/** A stored eval with its rule + provenance. */
+export type EvalRecord = {
+  id: string;
+  label: string;
+  description: string;
+  rule: string;
+  source: string;
+  sourceDeviationId: string | null;
+  createdAt: Date;
+};
+
+/** Rollup for one eval: latest-run pass/fail counts + regressions vs the previous run. */
+export type EvalSummary = EvalRecord & {
+  latestRunId: string | null;
+  lastRunAt: Date | null;
+  scored: number;
+  passed: number;
+  failed: number;
+  /** Traces failing in the latest run that were passing in the previous run. */
+  regressionCount: number;
+};
+
+/** One per-trace verdict in an eval's latest run, annotated with a regression flag + trace display fields. */
+export type EvalResultRow = {
+  traceId: string;
+  name: string | null;
+  agent: string | null;
+  /** When the scored trace was received — disambiguates identically-named traces. */
+  receivedAt: Date | null;
+  verdict: string;
+  evidence: string;
+  /** True when this trace is failing now but passed in the previous run. */
+  regression: boolean;
+};
+
+/** One past run of an eval, oldest→newest — powers the pass-rate trend sparkline. */
+export type EvalRunPoint = { runId: string; at: Date | null; passed: number; failed: number; total: number };
+
+/** Full eval detail: the eval, its latest-run rollup, the per-trace verdicts, and the run history. */
+export type EvalDetail = EvalSummary & { results: EvalResultRow[]; history: EvalRunPoint[] };
+
+/**
+ * Create an eval from a discovered deviation — copies its label / description /
+ * rule. Idempotent: if an eval was already saved from this deviation, its id is
+ * returned instead of creating a duplicate. Returns null if the deviation no
+ * longer exists.
+ */
+export const createEvalFromDeviation = async (
+  db: CoachDb,
+  deviationId: string,
+): Promise<string | null> => {
+  const rows = await db.select().from(deviations).where(eq(deviations.id, deviationId)).limit(1);
+  const dev = rows[0];
+  if (!dev) return null;
+  const already = await db
+    .select({ id: evals.id })
+    .from(evals)
+    .where(eq(evals.sourceDeviationId, deviationId))
+    .limit(1);
+  if (already[0]) return already[0].id;
+  const id = newId('eval_');
+  await db.insert(evals).values({
+    id,
+    label: dev.label,
+    description: dev.description,
+    rule: dev.rule,
+    source: 'deviation',
+    sourceDeviationId: dev.id,
+  });
+  return id;
+};
+
+/** Create a hand-written eval from a label + rule (+ optional description). Returns the new eval id. */
+export const createManualEval = async (
+  db: CoachDb,
+  input: { label: string; rule: string; description?: string },
+): Promise<string> => {
+  const id = newId('eval_');
+  await db.insert(evals).values({
+    id,
+    label: input.label,
+    description: input.description ?? '',
+    rule: input.rule,
+    source: 'manual',
+    sourceDeviationId: null,
+  });
+  return id;
+};
+
+/** Delete an eval and all of its stored verdicts. Returns false if the eval didn't exist. */
+export const deleteEval = async (db: CoachDb, evalId: string): Promise<boolean> => {
+  const rows = await db.select({ id: evals.id }).from(evals).where(eq(evals.id, evalId)).limit(1);
+  if (!rows[0]) return false;
+  await db.delete(evalResults).where(eq(evalResults.evalId, evalId));
+  await db.delete(evals).where(eq(evals.id, evalId));
+  return true;
+};
+
+/**
+ * Score recent traces against one eval's rule (light tier, per trace) and store
+ * a pass/fail verdict + evidence per trace under `runId`. Marks the run `done`
+ * (or `error`, re-throwing) via the shared run-lifecycle helpers.
+ */
+export const runEval = async (
+  db: CoachDb,
+  opts: { evalId: string; runId: string; sampleSize?: number; signal?: AbortSignal },
+): Promise<{ scored: number; passed: number; failed: number }> => {
+  const sampleSize = Math.max(1, Math.min(opts.sampleSize ?? DEFAULT_EVAL_SAMPLE, 200));
+  try {
+    const evalRows = await db.select().from(evals).where(eq(evals.id, opts.evalId)).limit(1);
+    const ev = evalRows[0];
+    if (!ev) throw new Error(`eval ${opts.evalId} not found`);
+
+    // Sample the newest traces (full raw envelope needed to rebuild the view).
+    const rows = await db
+      .select({ id: traces.id, raw: traces.raw })
+      .from(traces)
+      .orderBy(desc(traces.receivedAt), desc(traces.id))
+      .limit(sampleSize);
+
+    let passed = 0;
+    let failed = 0;
+    const results: Array<typeof evalResults.$inferInsert> = [];
+    await updateRunProgress(db, opts.runId, 0, rows.length);
+    let scanned = 0;
+    for (const row of rows) {
+      // Cancel/timeout mid-run: stop scoring further traces promptly (the lock is
+      // freed and the results won't be persisted anyway) instead of spending on.
+      if (!(await isRunLive(db, opts.runId))) break;
+      const view = buildTraceView(row.raw, row.id);
+      const block = renderTraceView(view, row.id);
+      const { object } = await generateStructuredTracked(db, 'eval', {
+        schema: EvalVerdictSchema,
+        system: EVAL_SYSTEM_PROMPT,
+        prompt: `Rule the agent should follow:\n"${ev.rule}"\n\nDoes the following trace COMPLY with that rule (pass) or VIOLATE it (fail)? Judge only against the rule above.\n\n${block}`,
+        tier: 'light',
+        temperature: 0,
+        signal: opts.signal,
+      });
+      if (object.verdict === 'pass') passed += 1;
+      else failed += 1;
+      results.push({
+        id: newId('evr_'),
+        evalId: ev.id,
+        runId: opts.runId,
+        traceId: row.id,
+        verdict: object.verdict,
+        evidence: object.evidence,
+      });
+      scanned += 1;
+      await updateRunProgress(db, opts.runId, scanned, rows.length);
+    }
+    // Skip the write if the run was canceled/timed out mid-scoring.
+    if (!(await isRunLive(db, opts.runId))) return { scored: 0, passed: 0, failed: 0 };
+    if (results.length > 0) await db.insert(evalResults).values(results);
+
+    const result = { scored: rows.length, passed, failed };
+    await finishRun(db, opts.runId, result);
+    return result;
+  } catch (err) {
+    await failRun(db, opts.runId, err instanceof Error ? err.message : String(err)).catch(() => {});
+    throw err;
+  }
+};
+
+/**
+ * The two most recent run ids that produced verdicts for one eval, newest
+ * first (by run start). `[latestRunId, previousRunId]`, either possibly absent.
+ */
+const latestTwoRuns = async (db: CoachDb, evalId: string): Promise<Array<{ runId: string; startedAt: Date }>> =>
+  db
+    .selectDistinct({ runId: evalResults.runId, startedAt: runs.startedAt })
+    .from(evalResults)
+    .innerJoin(runs, eq(evalResults.runId, runs.id))
+    .where(eq(evalResults.evalId, evalId))
+    .orderBy(desc(runs.startedAt))
+    .limit(2);
+
+/** The set of trace ids that received a given verdict for one eval in one run. */
+const traceIdsWithVerdict = async (
+  db: CoachDb,
+  evalId: string,
+  runId: string,
+  verdict: 'pass' | 'fail',
+): Promise<Set<string>> => {
+  const rows = await db
+    .select({ traceId: evalResults.traceId })
+    .from(evalResults)
+    .where(and(eq(evalResults.evalId, evalId), eq(evalResults.runId, runId), eq(evalResults.verdict, verdict)));
+  return new Set(rows.map((r) => r.traceId));
+};
+
+/**
+ * List every eval with its latest-run rollup (pass/fail counts + regression
+ * count vs the previous run), newest eval first.
+ */
+export const listEvalSummaries = async (db: CoachDb): Promise<EvalSummary[]> => {
+  const evalRows = await db.select().from(evals).orderBy(desc(evals.createdAt), desc(evals.id));
+  const summaries: EvalSummary[] = [];
+  for (const ev of evalRows) {
+    const runsForEval = await latestTwoRuns(db, ev.id);
+    const latest = runsForEval[0];
+    const previous = runsForEval[1];
+    if (!latest) {
+      summaries.push({ ...ev, latestRunId: null, lastRunAt: null, scored: 0, passed: 0, failed: 0, regressionCount: 0 });
+      continue;
+    }
+    const latestRows = await db
+      .select({ traceId: evalResults.traceId, verdict: evalResults.verdict })
+      .from(evalResults)
+      .where(and(eq(evalResults.evalId, ev.id), eq(evalResults.runId, latest.runId)));
+    const passed = latestRows.filter((r) => r.verdict === 'pass').length;
+    const failed = latestRows.length - passed;
+    // Regression = a trace failing now that was passing in the previous run.
+    const prevPass = previous ? await traceIdsWithVerdict(db, ev.id, previous.runId, 'pass') : new Set<string>();
+    const regressionCount = latestRows.filter((r) => r.verdict === 'fail' && prevPass.has(r.traceId)).length;
+    summaries.push({
+      ...ev,
+      latestRunId: latest.runId,
+      lastRunAt: latest.startedAt,
+      scored: latestRows.length,
+      passed,
+      failed,
+      regressionCount,
+    });
+  }
+  return summaries;
+};
+
+/**
+ * One eval's full detail: the latest-run rollup plus every per-trace verdict
+ * (each flagged when it is a regression). Returns null if the eval is gone.
+ */
+export const getEvalDetail = async (db: CoachDb, evalId: string): Promise<EvalDetail | null> => {
+  const rows = await db.select().from(evals).where(eq(evals.id, evalId)).limit(1);
+  const ev = rows[0];
+  if (!ev) return null;
+
+  // Every past run's pass/fail totals, oldest→newest, for the trend sparkline.
+  const historyRows = await db
+    .select({
+      runId: evalResults.runId,
+      at: runs.startedAt,
+      passed: sql<number>`count(*) filter (where ${evalResults.verdict} = 'pass')::int`,
+      total: sql<number>`count(*)::int`,
+    })
+    .from(evalResults)
+    .innerJoin(runs, eq(evalResults.runId, runs.id))
+    .where(eq(evalResults.evalId, ev.id))
+    .groupBy(evalResults.runId, runs.startedAt)
+    .orderBy(runs.startedAt);
+  const history: EvalRunPoint[] = historyRows.map((h) => ({
+    runId: h.runId,
+    at: h.at,
+    passed: h.passed,
+    failed: h.total - h.passed,
+    total: h.total,
+  }));
+
+  const runsForEval = await latestTwoRuns(db, ev.id);
+  const latest = runsForEval[0];
+  const previous = runsForEval[1];
+  if (!latest) {
+    return { ...ev, latestRunId: null, lastRunAt: null, scored: 0, passed: 0, failed: 0, regressionCount: 0, results: [], history };
+  }
+
+  const prevPass = previous ? await traceIdsWithVerdict(db, ev.id, previous.runId, 'pass') : new Set<string>();
+  const resultRows = await db
+    .select({
+      traceId: evalResults.traceId,
+      verdict: evalResults.verdict,
+      evidence: evalResults.evidence,
+      name: traces.name,
+      agent: traces.agent,
+      receivedAt: traces.receivedAt,
+    })
+    .from(evalResults)
+    .leftJoin(traces, eq(evalResults.traceId, traces.id))
+    .where(and(eq(evalResults.evalId, ev.id), eq(evalResults.runId, latest.runId)));
+
+  // Failing traces first (they're what the user acts on), regressions at the very top.
+  const results: EvalResultRow[] = resultRows
+    .map((r) => ({ ...r, regression: r.verdict === 'fail' && prevPass.has(r.traceId) }))
+    .sort((a, b) => rank(a) - rank(b));
+  const passed = results.filter((r) => r.verdict === 'pass').length;
+  const failed = results.length - passed;
+  const regressionCount = results.filter((r) => r.regression).length;
+
+  return {
+    ...ev,
+    latestRunId: latest.runId,
+    lastRunAt: latest.startedAt,
+    scored: results.length,
+    passed,
+    failed,
+    regressionCount,
+    results,
+    history,
+  };
+};
+
+/** Ordering key for the detail rows: regressions (0) → other failures (1) → passes (2). */
+const rank = (r: EvalResultRow): number => (r.regression ? 0 : r.verdict === 'fail' ? 1 : 2);
