@@ -2,8 +2,30 @@
   "name": "@glassray/coach",
   "version": "0.1.0",
   "description": "Glassray Coach — a fully self-contained local AI-agent trace viewer (OTLP in, dashboard out).",
+  "keywords": [
+    "ai-agents",
+    "glassray",
+    "observability",
+    "opentelemetry",
+    "otlp",
+    "tracing",
+    "llm",
+    "evals",
+    "debugger",
+    "mcp",
+    "local"
+  ],
   "type": "module",
   "license": "MIT",
+  "author": "Glassray",
+  "homepage": "https://github.com/glassray/glassray-coach#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/glassray/glassray-coach.git"
+  },
+  "bugs": {
+    "url": "https://github.com/glassray/glassray-coach/issues"
+  },
   "publishConfig": {
     "access": "public"
   },
