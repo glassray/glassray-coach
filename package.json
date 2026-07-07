@@ -1,6 +1,6 @@
 {
   "name": "@glassray/coach",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Glassray Coach — a fully self-contained local AI-agent trace viewer (OTLP in, dashboard out).",
   "keywords": [
     "ai-agents",
