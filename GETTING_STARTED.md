@@ -56,8 +56,9 @@ node examples/send-otlp.mjs
 That sends one realistic **agent → LLM → tool** trace. It auto-discovers your local
 key, so there's nothing to configure. It prints a link straight to the trace.
 
-Want a fuller picture? Send a whole corpus with three *deliberately broken*
-behaviours (great for trying discovery):
+Want a fuller picture? Send a whole day of realistic traffic — instrumented with the
+real `@glassray/tracing` SDK — with three *recurring, silent* failure modes planted
+(great for trying discovery):
 
 ```sh
 node examples/support-bot/support-bot.mjs

@@ -1,78 +1,93 @@
-# Sample flow: debugging & hardening a support agent
+# The support-bot demo: find the failures your dashboards can't see
 
-A complete, runnable walkthrough of how you'd actually use Coach while building an
-AI agent — from "traces are landing" to "regressions are locked out." It ships a
-small **simulated** support agent whose LLM/tool calls are canned (so it runs with
-no API key and is deterministic), instrumented exactly the way you'd instrument a
-real one.
+A complete, runnable walkthrough of the Coach loop — **discover → codify as evals →
+fix → prove no regression** — built around a simulated customer-support agent for a
+fictional store. Everything the agent "says" is canned (no API key needed,
+deterministic), but the instrumentation is the real
+[`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js) SDK — the
+`import` in [`support-bot.mjs`](./support-bot.mjs) is exactly what a production
+agent ships.
 
-The agent has three **recurring, silent** bugs — wrong answers that are *not*
-errors, so ordinary monitoring shows everything green. That's the point: Coach
-finds them.
+The premise: the agent handles **34 tickets** and the dashboards look great —
+~97% success, normal latency, no alarms. But **11 of those "successful" replies
+are wrong**: they violate the agent's own policy in three recurring ways, and none
+of them raised an error. That's the class of failure Coach exists for.
 
-> Instrumentation uses `./trace-lite.mjs`, a ~120-line stand-in for the
-> [`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js) SDK with the
-> same `trace / llm / tool` shape. `@glassray/tracing` is on npm — a real agent
-> imports it directly instead of the shim.
+| Planted failure mode | What the agent does wrong | How often |
+| --- | --- | --- |
+| **Ungrounded order status** | Answers "where's my order?" with an *invented* status — no `lookup_order` call | 5 of 8 order tickets |
+| **Unauthorized refund** | Issues refunds over the **$100 policy limit** instead of escalating | 3 of 5 large refunds |
+| **PII leak** | Echoes the customer's **full card number** back in the reply | 3 of 4 card updates |
+
+The bugs are **intermittent** (some tickets in each category go fine), the way real
+agent failures are. The corpus also has ordinary messy traffic: a knowledge-base
+timeout the agent recovers from, one hard crash (billing service down), an
+18k-token outlier, and two multi-tool waterfalls.
 
 ## 0. Start Coach
 
+From a clone of this repo:
+
 ```sh
-cd coach
 npm install && npm run build:ui
-node bin/glassray.mjs         # dashboard + ingest on http://127.0.0.1:5899
+node bin/glassray.mjs          # dashboard + ingest on http://127.0.0.1:5899
 ```
 
-Leave it running and open <http://127.0.0.1:5899>.
+Leave it running and open <http://127.0.0.1:5899>. Starting from a clean slate
+demos best: `node bin/glassray.mjs reset --yes` first if you've sent traces before.
 
-## 1. Generate a corpus
+## 1. Send a day of traffic
 
 ```sh
-node examples/support-bot/support-bot.mjs      # 26 tickets through the "buggy" agent
+node examples/support-bot/support-bot.mjs      # 34 tickets through the buggy agent
 ```
 
-Open **Overview**. You'll see **26 traces, 0.0% errors** — every run "succeeded."
-The **Traces** list shows the agent → llm → tool waterfalls; click any one to see
-inputs, outputs, and span attributes.
+Open **Overview**: 34 traces, one error (~3%), token and cost rollups — a healthy-looking
+service. In **Traces**, click into a waterfall: inputs, outputs, models, and token
+counts on every span. Worth showing off:
+
+- Sort by tokens → the **18k-token outlier** (a customer pasted an entire email thread).
+- The trace with the red span — `search_kb` timed out and the agent degraded gracefully.
+- The one hard failure — `get_invoice` timed out and the whole ticket errored.
+
+Everything else is green. This is the "monitoring says we're fine" starting point.
 
 ## 2. Find what's actually broken
 
-Go to **Deviations → Run discovery**. Coach's LLM judge reads the traces and
-clusters the recurring ways the agent misbehaves. Within a run it surfaces three
-deviation types:
+**Deviations → Run discovery.** Coach's LLM judge reads the actual conversations and
+clusters the recurring ways the agent misbehaves — expect the three planted failure
+modes above to surface (it's an LLM pass, so labels and counts can vary slightly).
 
-| Deviation | What the agent did wrong | Examples |
-| --- | --- | --- |
-| **Ungrounded order status** | Answered "where's my order" with an invented status and **no `lookup_order` call** | 7 |
-| **Unauthorized refund** | Issued refunds over the **$100 policy limit** instead of escalating | 4 |
-| **PII leak** | Echoed the customer's **full card number** back in the reply | 3 |
+Click one: a plain-language rule, severity, and the exact traces that match. None of
+these threw an error — they're *semantic* failures, invisible to error-rate dashboards.
 
-None of these threw an error — they're *semantic* deviations. Click one to read its
-plain-language rule and the exact traces that match it.
+> Discovery needs a model, and its speed depends on the provider. On the
+> zero-config `~/.claude` subscription path a run over this corpus takes several
+> minutes (each judge call is a full Agent SDK turn) — kick it off, then tour the
+> traces while it works; the run card shows live "scanned N/M" progress. With a
+> metered key (`GLASSRAY_LLM_PROVIDER=anthropic` + `ANTHROPIC_API_KEY`) it's
+> roughly a minute. On the deterministic `mock` provider it returns a single
+> placeholder deviation (mechanics only, no real analysis).
 
-> Discovery needs a model. Locally it uses your `~/.claude` subscription
-> (zero-config) — see the root README's "LLM provider" table. On the deterministic
-> `mock` provider it returns a single placeholder deviation (mechanics only, no real
-> analysis).
+## 3. Freeze each deviation into an eval
 
-## 3. Turn a deviation into a repeatable check
+On each deviation, click **Save as eval**. That turns its rule into a repeatable
+pass/fail check. Run one now to get a baseline — an eval run scores the newest
+traces (20 by default), so you'll see it fail on the buggy corpus. You can also
+hand-write an eval under **Evals** (e.g. "The reply must never contain a full card
+number.").
 
-On a deviation you care about, click **Save as eval**. That freezes its rule into a
-pass/fail check you can re-run against any traces. Do it for all three. (You can
-also hand-write an eval under **Evals** — e.g. "The reply must never contain a full
-card number.")
-
-## 4. Fix the agent, prove it
+## 4. Ship the fix, prove it
 
 ```sh
-node examples/support-bot/support-bot.mjs --fixed    # same 26 tickets, bugs corrected
+node examples/support-bot/support-bot.mjs --fixed    # same 34 tickets, bugs corrected
 ```
 
-Now the fixed agent grounds order status in a `lookup_order` call, escalates large
-refunds, and redacts card numbers. Go to **Evals → (each) → Re-run eval**. The pass
-rate climbs — and if a change had *reintroduced* a previously-passing failure, the
-eval would flag it as a **regression**. That ratchet is the whole loop: discover →
-codify → prevent.
+The fixed agent grounds every order answer in `lookup_order`, escalates over-limit
+refunds to a human, and refers to cards by their last 4 digits. Now **Evals → each →
+Re-run eval**: the pass rate climbs, and the run history shows the trend. If a later
+change *reintroduced* a failure that used to pass, the eval would flag it as a
+**regression**. That ratchet is the whole loop: discover → codify → prevent.
 
 ## 5. Debug a single call (optional)
 
@@ -80,24 +95,47 @@ Open any trace, select an LLM span, and hit **Replay** — edit the model / syst
 prompt and re-issue it through your local LLM, with the fresh output beside the
 original. The viewer becomes a debugger.
 
-## From your coding agent (optional)
+## 6. Drive it from your coding agent (optional)
 
-With Coach running, register it as an MCP server so Claude Code / Cursor can query
-these real traces and run discovery/evals for you:
+With Coach running, register it as an MCP server:
 
 ```sh
-claude mcp add glassray -- node <path-to>/coach/bin/glassray.mjs mcp
+claude mcp add glassray -- npx @glassray/coach mcp
 ```
+
+Then ask Claude Code things like *"which support-bot traces echoed a full card
+number back to the customer?"* or *"run discovery and summarize what it found"* —
+the same traces, deviations, and evals, from your editor.
 
 ---
 
-### Files
+## The 5-minute demo script
+
+Timing note: on the zero-config subscription provider, discovery takes several
+minutes — so the script starts it early and tours the dashboard while it runs. On
+a metered key it's ~a minute and the order barely matters. For a rehearsal-free
+option, run discovery *before* the audience arrives and demo the finished results.
+
+1. **Before the demo:** `reset --yes`, start Coach, run the buggy corpus. Keep the
+   terminal visible — its closing summary sets up the story.
+2. **Deviations → Run discovery** — kick it off first thing: "while we look around,
+   Coach is reading the actual conversations and clustering recurring misbehavior —
+   no rules written in advance."
+3. **Overview** — "34 conversations today, 97% success. Ship it?"
+4. **Traces** — open one clean waterfall (inputs/outputs/tokens on every span), then
+   sort by tokens and show the 18k outlier. "Full visibility — but everything's green."
+5. **Back to Deviations** — open each one: the rule, the evidence, the offending
+   traces. "Eleven wrong answers. Zero errors. Your error rate never saw them."
+6. **Save as eval** on each, run one for a baseline. "The finding is now a test."
+7. Run `--fixed`, re-run the evals — pass rates climb. "Discovery finds it, evals
+   lock it in. That's the loop."
+
+## Files
 
 | File | Role |
 | --- | --- |
-| `trace-lite.mjs` | Dependency-free tracing shim (SDK-shaped); emits OTLP to Coach. |
-| `support-bot.mjs` | The simulated agent + a 26-ticket corpus + the runner (`--fixed` toggles the bugs off). |
+| [`support-bot.mjs`](./support-bot.mjs) | The simulated agent (instrumented with `@glassray/tracing`), the 34-ticket corpus, and the runner — `--fixed` turns the bugs off. |
 
-### Reset between runs
+## Reset between runs
 
 `node bin/glassray.mjs reset --yes` wipes the local data dir for a clean slate.

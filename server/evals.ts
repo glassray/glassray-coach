@@ -1,7 +1,7 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { CoachDb } from './bootstrap.js';
-import { finishRun, failRun, isRunLive, renderTraceView, updateRunProgress } from './discovery.js';
+import { finishRun, failRun, isRunLive, judgeInWaves, renderTraceView } from './discovery.js';
 import { generateStructuredTracked } from './usage.js';
 import { newId } from './ids.js';
 import { deviations, evalResults, evals, runs, traces } from './schema.js';
@@ -153,15 +153,9 @@ export const runEval = async (
       .orderBy(desc(traces.receivedAt), desc(traces.id))
       .limit(sampleSize);
 
-    let passed = 0;
-    let failed = 0;
-    const results: Array<typeof evalResults.$inferInsert> = [];
-    await updateRunProgress(db, opts.runId, 0, rows.length);
-    let scanned = 0;
-    for (const row of rows) {
-      // Cancel/timeout mid-run: stop scoring further traces promptly (the lock is
-      // freed and the results won't be persisted anyway) instead of spending on.
-      if (!(await isRunLive(db, opts.runId))) break;
+    // Score each sampled trace against the rule (in concurrent waves; progress
+    // publishes per wave, and a canceled/timed-out run stops between waves).
+    const verdicts = await judgeInWaves(db, opts.runId, rows, async (row) => {
       const view = buildTraceView(row.raw, row.id);
       const block = renderTraceView(view, row.id);
       const { object } = await generateStructuredTracked(db, 'eval', {
@@ -172,19 +166,18 @@ export const runEval = async (
         temperature: 0,
         signal: opts.signal,
       });
-      if (object.verdict === 'pass') passed += 1;
-      else failed += 1;
-      results.push({
-        id: newId('evr_'),
-        evalId: ev.id,
-        runId: opts.runId,
-        traceId: row.id,
-        verdict: object.verdict,
-        evidence: object.evidence,
-      });
-      scanned += 1;
-      await updateRunProgress(db, opts.runId, scanned, rows.length);
-    }
+      return { traceId: row.id, verdict: object.verdict, evidence: object.evidence };
+    });
+    const passed = verdicts.filter((v) => v.verdict === 'pass').length;
+    const failed = verdicts.length - passed;
+    const results: Array<typeof evalResults.$inferInsert> = verdicts.map((v) => ({
+      id: newId('evr_'),
+      evalId: ev.id,
+      runId: opts.runId,
+      traceId: v.traceId,
+      verdict: v.verdict,
+      evidence: v.evidence,
+    }));
     // Skip the write if the run was canceled/timed out mid-scoring.
     if (!(await isRunLive(db, opts.runId))) return { scored: 0, passed: 0, failed: 0 };
     if (results.length > 0) await db.insert(evalResults).values(results);

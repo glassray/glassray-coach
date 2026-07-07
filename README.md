@@ -88,8 +88,9 @@ also **Save as eval** straight from a trace's detail view, write one under **Eva
 map behaviours with **Flows** → **Run flows**.
 
 No agent handy? `node examples/send-otlp.mjs` sends a realistic sample trace, or reach
-for the fuller [`examples/support-bot/`](./examples/support-bot/) — an instrumented
-simulated agent with planted recurring failure modes plus a step-by-step walkthrough (see
+for the fuller [`examples/support-bot/`](./examples/support-bot/) — a simulated agent
+instrumented with the real `@glassray/tracing` SDK, with planted recurring failure modes
+plus a step-by-step walkthrough and demo script (see
 [`examples/support-bot/README.md`](./examples/support-bot/README.md)). See
 [`examples/`](./examples/) for both. To instrument a real agent, use the
 [`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js) SDK (point it at
@@ -162,7 +163,7 @@ you; set them directly when running `npm run dev` / `npm start` outside the CLI.
 | `GLASSRAY_HEAVY_MODEL_ID`   | `claude-opus-4-8` (`gpt-4o` on openai)                   | Heavy-tier model id — applies to **every** provider.                                                                                               |
 | `GLASSRAY_LIGHT_MODEL_ID`   | `claude-sonnet-4-6` (`gpt-4o-mini` on openai)            | Light-tier model id — applies to **every** provider.                                                                                               |
 | `GLASSRAY_LLM_BUDGET_USD`   | `50`                                                     | Metered spend cap; `0` = unlimited.                                                                                                                |
-| `GLASSRAY_RUN_TIMEOUT_MS`   | `300000`                                                 | Backstop timeout (ms) for a background run — a stalled run is marked errored so the single-run lock frees and the UI stops spinning; `0` disables. |
+| `GLASSRAY_RUN_TIMEOUT_MS`   | `600000`                                                 | Backstop timeout (ms) for a background run — a stalled run is marked errored so the single-run lock frees and the UI stops spinning; `0` disables. |
 | `ANTHROPIC_API_KEY`         | —                                                        | Required by the `anthropic` provider.                                                                                                              |
 | `OPENAI_API_KEY`            | —                                                        | Required by the `openai` provider.                                                                                                                 |
 

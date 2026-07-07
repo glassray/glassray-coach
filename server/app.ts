@@ -124,7 +124,7 @@ const MIN_BUCKET_MS = 60_000;
  */
 const RUN_TIMEOUT_MS = (() => {
   const raw = Number(process.env.GLASSRAY_RUN_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw >= 0 ? raw : 300_000;
+  return Number.isFinite(raw) && raw >= 0 ? raw : 600_000;
 })();
 
 /** Upper bound on rows scanned for the timeline (a wedge cap — newest-first). */

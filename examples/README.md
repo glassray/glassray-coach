@@ -1,14 +1,13 @@
 # Coach examples
 
-Two ways to get a trace into a locally-running Coach. Start Coach first:
+Ways to get traces into a locally-running Coach. The example scripts run from a
+clone of this repo; Coach itself needs no clone — start it first:
 
 ```sh
-cd coach
-npm install && npm run build:ui
-node bin/glassray.mjs       # serves the dashboard + ingest on http://127.0.0.1:5899
+npx @glassray/coach         # serves the dashboard + ingest on http://127.0.0.1:5899
 ```
 
-## 1. `send-otlp.mjs` — zero dependencies, works today
+## 1. `send-otlp.mjs` — one sample trace, zero dependencies
 
 Sends one realistic **AGENT → LLM → TOOL** trace as raw OTLP/JSON (gzip-compressed,
 bearer-authed) — exactly the wire format the SDK produces. It auto-discovers the local
@@ -20,41 +19,31 @@ node examples/send-otlp.mjs
 #   view it at http://127.0.0.1:5899/#/trace/<id>
 ```
 
-Handy as a "give me some sample data" button while developing Coach.
+Handy as a "give me some sample data" button while developing Coach, and as a
+reference for the raw wire format if you're integrating from a language without an
+SDK.
 
-## 2. `with-glassray-sdk.mjs` — the real SDK
+## 2. `support-bot/` — the demo, and the full developer walkthrough
 
-The same trace, produced by the [`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js)
-SDK — how you'd actually instrument an agent. The SDK handles OTLP encoding, gzip,
-batching, and retries.
-
-```sh
-npm install @glassray/tracing
-export GLASSRAY_ENDPOINT="http://127.0.0.1:5899"   # else it sends to Glassray Cloud
-export GLASSRAY_API_KEY="$(curl -s http://127.0.0.1:5899/api/info | node -e 'process.stdin.once("data",d=>console.log(JSON.parse(d).apiKey))')"
-node examples/with-glassray-sdk.mjs
-```
-
-> The SDK's OTLP attribute contract is identical to the one Coach's normalizer reads, so
-> traces render the same whether you use the SDK or hand-built OTLP. `@glassray/tracing`
-> is [on npm](https://www.npmjs.com/package/@glassray/tracing), and a Coach test drives a
-> real round trip through it (`server/sdk-roundtrip.test.ts`) so the wire format can't
-> drift.
-
-## 3. `support-bot/` — the full developer walkthrough
-
-A simulated customer-support agent (`examples/support-bot/support-bot.mjs`) instrumented
-with a dependency-free, SDK-shaped tracing shim (`trace-lite.mjs`) that emits a corpus of
-~26 traces. Three **recurring** failure modes are planted in the corpus — answering
-order-status questions with no `lookup_order` call, issuing refunds over the $100 limit,
-and echoing full card numbers back to the customer — so **Run discovery** has real signal
-to cluster.
+A simulated customer-support agent instrumented with the real
+[`@glassray/tracing`](https://www.npmjs.com/package/@glassray/tracing) SDK (a
+devDependency of this repo, so it works right after `npm install`). It sends **34
+tickets** of realistic traffic — including a tool timeout, one hard failure, and an
+18k-token outlier — with three **recurring, intermittent** failure modes planted:
+ungrounded order-status answers, refunds over the $100 limit, and full card numbers
+echoed back to customers. None of them error, so the dashboards stay green — until
+**Run discovery** clusters them.
 
 ```sh
-node examples/support-bot/support-bot.mjs           # the buggy corpus
-# … save the deviations as evals, then prove the fix:
+node examples/support-bot/support-bot.mjs            # the buggy corpus
+# … save the discovered deviations as evals, then prove the fix:
 node examples/support-bot/support-bot.mjs --fixed    # same tickets, bugs corrected
 ```
 
-The full step-by-step loop — discover → codify as evals → fix → prove no regression —
-is in [`examples/support-bot/README.md`](support-bot/README.md).
+The step-by-step loop — discover → codify as evals → fix → prove no regression —
+plus a 5-minute demo script is in
+[`examples/support-bot/README.md`](support-bot/README.md). Since it uses the real
+SDK, `support-bot.mjs` doubles as the reference for instrumenting your own agent
+(`glassray.trace` / `t.llm` / `t.tool`); a Coach test drives a real round trip
+through the published package (`server/sdk-roundtrip.test.ts`) so the wire format
+can't drift.

@@ -275,8 +275,16 @@ const mockObject = <T>(schema: z.ZodType<T>, promptText: string): T => {
 
 // ── subscription backend (Claude Agent SDK over ~/.claude) ───────────────────
 
-/** Per-call budget (ms) for a subscription generation before the abort controller fires. */
-const SUBSCRIPTION_BUDGET_MS = 120_000;
+/**
+ * Per-call budget (ms) for a subscription generation before the abort
+ * controller fires. Generous because the subscription path runs a full Agent
+ * SDK turn per call — the heavy-tier clustering call over a large findings
+ * list can legitimately take minutes.
+ */
+const SUBSCRIPTION_BUDGET_MS = 300_000;
+
+/** Thrown when a subscription call exhausts SUBSCRIPTION_BUDGET_MS — deliberately NOT retried (a rerun would just spend the same budget again). */
+class SubscriptionBudgetError extends Error {}
 
 /** Run one Agent SDK completion under a timeout; return its success result text + token usage. */
 const runAgentText = async (
@@ -286,7 +294,11 @@ const runAgentText = async (
 ): Promise<{ text: string; usage: LlmUsage }> => {
   const { query } = await import('@anthropic-ai/claude-agent-sdk');
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), SUBSCRIPTION_BUDGET_MS);
+  let budgetHit = false;
+  const timer = setTimeout(() => {
+    budgetHit = true;
+    abort.abort();
+  }, SUBSCRIPTION_BUDGET_MS);
   // Fold an external cancel/timeout signal into this call's controller, so a
   // canceled run aborts the in-flight query instead of draining it to completion.
   const onExternalAbort = () => abort.abort();
@@ -305,11 +317,25 @@ const runAgentText = async (
         if (u) usage = { tokensIn: u.input_tokens ?? 0, tokensOut: u.output_tokens ?? 0 };
       }
     }
+  } catch (err) {
+    if (budgetHit) {
+      throw new SubscriptionBudgetError(
+        `subscription LLM call exceeded its ${SUBSCRIPTION_BUDGET_MS / 1000}s budget — aborted`,
+      );
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener('abort', onExternalAbort);
   }
-  if (!text) throw new Error('Claude returned no result');
+  if (!text) {
+    if (budgetHit) {
+      throw new SubscriptionBudgetError(
+        `subscription LLM call exceeded its ${SUBSCRIPTION_BUDGET_MS / 1000}s budget — aborted`,
+      );
+    }
+    throw new Error('Claude returned no result');
+  }
   return { text, usage };
 };
 
@@ -330,6 +356,8 @@ const subscriptionStructured = async <T>(
   } catch (firstErr) {
     // A caller abort must not be retried — propagate it so the run stops promptly.
     signal?.throwIfAborted();
+    // Neither is a blown per-call budget: the retry would spend it all again.
+    if (firstErr instanceof SubscriptionBudgetError) throw firstErr;
     const hint = `\n\nYour previous response could not be used: ${
       firstErr instanceof Error ? firstErr.message : String(firstErr)
     }. Respond again with ONLY the JSON object — no prose, no code fences.`;
