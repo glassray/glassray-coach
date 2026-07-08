@@ -21,8 +21,13 @@ flowchart LR
 
 ## 1 · Start Coach
 
+Run it once with npx — or install it permanently, your pick:
+
 ```sh
-npx @glassray/coach start
+npx @glassray/coach start          # no install
+
+npm i -g @glassray/coach           # …or permanent: `glassray` on your PATH
+glassray start
 ```
 
 You'll see the connect block with everything you need:

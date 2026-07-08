@@ -39,7 +39,16 @@ The loop:
 
 Requires **Node 20.6+** (`glassray doctor` checks the Node version, the port, and data-dir writability for you).
 Prefer a guided tour? See [`GETTING_STARTED.md`](./GETTING_STARTED.md). One command — no clone, no install:
-`npx @glassray/coach start` (or `npm i -g @glassray/coach`, then `glassray start`) boots the server on `http://127.0.0.1:5899/` and prints the dashboard URL, the ingest endpoint, your local API key, and this copy-paste OTLP exporter block:
+Run once, or install permanently:
+
+```sh
+npx @glassray/coach start     # no install
+
+npm i -g @glassray/coach      # …or permanent: `glassray` on your PATH
+glassray start                # (upgrade later when the CLI shows its ▲ notice)
+```
+
+Either boots the server on `http://127.0.0.1:5899/` and prints the dashboard URL, the ingest endpoint, your local API key, and this copy-paste OTLP exporter block:
 
 ```sh
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:5899"
