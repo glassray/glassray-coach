@@ -215,7 +215,10 @@ const upsertTraceUnlocked = async (
     .values({ id, ...fields })
     .onConflictDoUpdate({
       target: traces.id,
-      set: { ...fields, receivedAt: sql`now()` },
+      // A merge can materially change the trace's facts (root name lands last
+      // under a batch exporter), so re-open the classification watermark — the
+      // sweep re-derives idempotently and must see the completed trace.
+      set: { ...fields, receivedAt: sql`now()`, classifiedAt: null },
     });
 };
 

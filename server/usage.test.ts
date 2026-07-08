@@ -37,7 +37,7 @@ const waitForRun = async (runId: string): Promise<{ status: string }> => {
   for (let i = 0; i < 100; i++) {
     const res = await fetch(`${baseUrl}/api/runs/${runId}`);
     const body = (await res.json()) as { status: string };
-    if (body.status !== 'running') return body;
+    if (body.status === 'done' || body.status === 'error') return body;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`run ${runId} did not finish`);

@@ -60,7 +60,7 @@ const waitForRun = async (runId: string): Promise<{ status: string; stats: Recor
   for (let i = 0; i < 100; i++) {
     const res = await fetch(`${baseUrl}/api/runs/${runId}`);
     const body = (await res.json()) as { status: string; stats: Record<string, number> | null };
-    if (body.status !== 'running') return body;
+    if (body.status === 'done' || body.status === 'error') return body;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`run ${runId} did not finish in time`);
@@ -131,37 +131,45 @@ describe('glassray M3 discovery + flows (mock)', () => {
     expect(knownIds.has(detailBody.examples[0]!.traceId)).toBe(true);
   });
 
-  it('serializes overlapping runs via the single-run lock and releases it', async () => {
-    // Fire two runs concurrently. Each is accepted (202) or rejected while the
-    // other holds the lock (409); a mock run drains in microtasks so it usually
-    // serializes to 202 + 202, but the lock must NEVER admit a crash or a stuck
-    // state — and any 409 must carry the in-progress error.
+  it('never 409s under concurrency: same-key runs dedup to one run or serialize, all complete', async () => {
+    // Two concurrent discovery POSTs share the dedup key. While the first run
+    // is still live the second must join it (same runId); a mock run can also
+    // finish before the second arrives, which legitimately mints a new run —
+    // either way both callers get a pollable 202 that reaches `done`.
     const [a, b] = await Promise.all([
-      fetch(`${baseUrl}/api/flows/run`, { method: 'POST' }),
+      fetch(`${baseUrl}/api/discovery/run`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
       fetch(`${baseUrl}/api/discovery/run`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({}),
       }),
     ]);
-    for (const res of [a, b]) {
-      expect([202, 409]).toContain(res.status);
-      const body = (await res.json()) as { runId?: string; error?: string };
-      if (res.status === 202) {
-        expect(body.runId).toMatch(/^run_/);
-        expect((await waitForRun(body.runId!)).status).toBe('done');
-      } else {
-        expect(body.error).toMatch(/in progress/);
-      }
+    expect(a.status).toBe(202);
+    expect(b.status).toBe(202);
+    const aBody = (await a.json()) as { runId: string };
+    const bBody = (await b.json()) as { runId: string };
+    for (const runId of new Set([aBody.runId, bBody.runId])) {
+      expect(runId).toMatch(/^run_/);
+      expect((await waitForRun(runId)).status).toBe('done');
     }
-    // Lock released: a fresh run still starts and completes.
-    const again = await fetch(`${baseUrl}/api/flows/run`, { method: 'POST' });
+
+    // Queue released: a fresh run is a NEW run id and completes.
+    const again = await fetch(`${baseUrl}/api/discovery/run`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
     expect(again.status).toBe(202);
     const { runId } = (await again.json()) as { runId: string };
+    expect(runId).not.toBe(aBody.runId);
     expect((await waitForRun(runId)).status).toBe('done');
   });
 
-  it('runs flows to done and surfaces at least one flow with member traces', async () => {
+  it('runs the flows bootstrap to done and persists durable flows (no duplicates on re-run)', async () => {
     const start = await fetch(`${baseUrl}/api/flows/run`, { method: 'POST' });
     expect(start.status).toBe(202);
     const { runId } = (await start.json()) as { runId: string };
@@ -171,19 +179,31 @@ describe('glassray M3 discovery + flows (mock)', () => {
 
     const list = await fetch(`${baseUrl}/api/flows`);
     const body = (await list.json()) as {
-      items: Array<{ id: string; name: string; traceCount: number }>;
-      runId: string | null;
+      items: Array<{ id: string; name: string; traceCount: number; classify: string; rule: string | null }>;
+      unclassified: number;
     };
     expect(body.items.length).toBeGreaterThanOrEqual(1);
     const first = body.items[0]!;
     expect(first.traceCount).toBeGreaterThanOrEqual(1);
+    expect(first.classify).toBe('llm');
+    expect(first.rule).toBeTruthy();
 
     const detail = await fetch(`${baseUrl}/api/flows/${first.id}`);
     const detailBody = (await detail.json()) as {
-      flow: { id: string };
-      traces: Array<{ traceId: string; agent: string | null }>;
+      id: string;
+      members: Array<{ traceId: string; assignedBy: string }>;
     };
-    expect(detailBody.flow.id).toBe(first.id);
-    expect(detailBody.traces.length).toBeGreaterThanOrEqual(1);
+    expect(detailBody.id).toBe(first.id);
+    expect(detailBody.members.length).toBeGreaterThanOrEqual(1);
+    expect(detailBody.members[0]!.assignedBy).toBe('llm');
+
+    // Re-running the bootstrap must EXTEND the durable set, not duplicate it —
+    // the mock re-proposes the same flow name, which is name-deduped to zero.
+    const again = await fetch(`${baseUrl}/api/flows/run`, { method: 'POST' });
+    const rerun = await waitForRun(((await again.json()) as { runId: string }).runId);
+    expect(rerun.status).toBe('done');
+    expect(rerun.stats?.flowCount).toBe(0);
+    const after = (await (await fetch(`${baseUrl}/api/flows`)).json()) as { items: unknown[] };
+    expect(after.items.length).toBe(body.items.length);
   });
 });

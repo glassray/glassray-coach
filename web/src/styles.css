@@ -2297,3 +2297,154 @@ a {
   padding-top: 0.4rem;
   padding-bottom: 0.4rem;
 }
+
+/* ── Durable flows: chips, provenance badges, definition forms, audit ───────── */
+
+/* Header action cluster on the flows list: "New flow" beside the discover RunBar. */
+.flow-head-actions {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+/* Small neutral toggle beside a list caption (active ↔ archived flows). */
+.list-toggle {
+  margin-left: 0.6rem;
+  padding: 0.1rem 0.55rem;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  background: var(--card);
+  border: 1px solid var(--input);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.list-toggle:hover {
+  background: var(--muted);
+}
+
+/* How a flow classifies members: selector (deterministic) vs llm (rule). */
+.classify-chip {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.classify-chip-selector {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 10%, var(--card));
+}
+.classify-chip-llm {
+  color: var(--kind-llm);
+  background: color-mix(in srgb, var(--kind-llm) 10%, var(--card));
+}
+
+/* Membership provenance: how a trace got into the flow. */
+.assign-badge {
+  padding: 0.1rem 0.5rem;
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-radius: 999px;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  background: var(--muted);
+}
+.assign-selector {
+  color: var(--brand);
+  background: color-mix(in srgb, var(--brand) 10%, var(--card));
+}
+.assign-llm {
+  color: var(--kind-llm);
+  background: color-mix(in srgb, var(--kind-llm) 10%, var(--card));
+}
+.assign-manual {
+  color: var(--kind-tool);
+  background: color-mix(in srgb, var(--kind-tool) 10%, var(--card));
+}
+.confidence-low {
+  margin-left: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--kind-tool);
+}
+/* Low-confidence member rows get a faint amber wash + left accent. */
+.row-lowconf td {
+  background: color-mix(in srgb, var(--warning) 10%, var(--card));
+}
+.row-lowconf td:first-child {
+  box-shadow: inset 2px 0 0 var(--warning);
+}
+
+/* Selector constraint inputs laid out as a responsive grid. */
+.flow-form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  gap: 0.75rem;
+}
+.flow-classify-field {
+  max-width: 20rem;
+}
+/* One line of a flow's definition card (selector summary / quoted rule). */
+.flow-def-line {
+  margin: 2px 0;
+}
+/* Keep the flows-list definition column compact so the trailing count stays in view. */
+.flow-def-cell .cell-preview {
+  max-width: 300px;
+}
+
+/* Audit section: counts line + subsection headings. */
+.flow-audit-counts {
+  margin: -6px 0 10px;
+  font-size: 0.82rem;
+}
+.flow-audit-subtitle {
+  margin: 0.75rem 0 0.5rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+
+/* A tag that navigates (e.g. an eval's flow-binding chip). */
+.tag-link {
+  text-decoration: none;
+}
+.tag-link:hover {
+  background: var(--accent);
+  border-color: var(--muted-foreground);
+}
+/* Autorun-enabled marker on a flow's attached-evals list. */
+.tag-autorun {
+  color: var(--brand);
+  border-color: color-mix(in srgb, var(--brand) 40%, var(--border));
+  background: color-mix(in srgb, var(--brand) 8%, var(--card));
+}
+
+/* Eval detail: flow-scope + autorun editor row. */
+.eval-scope {
+  margin-top: 1rem;
+}
+.eval-scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
+}
+.eval-scope-row .new-eval-field {
+  min-width: 14rem;
+}
+.eval-autorun-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding-bottom: 0.55rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+.eval-threshold {
+  width: 9rem;
+}

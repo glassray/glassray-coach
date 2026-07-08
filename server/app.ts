@@ -3,20 +3,37 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib';
 import fastifyStatic from '@fastify/static';
-import { and, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import type { CoachRuntime } from './bootstrap.js';
-import { createRun, failRun, runDiscovery } from './discovery.js';
 import {
+  classifyTracesInline,
+  countUnclassified,
+  flowSelectorSchema,
+  resetClassificationForBackfill,
+  runClassifySweep,
+} from './classify.js';
+import { claimQueuedRun, createRun, failRun, runDiscovery, type RunKind } from './discovery.js';
+import {
+  autorunDueEvals,
   createEvalFromDeviation,
   createManualEval,
   deleteEval,
   getEvalDetail,
   listEvalSummaries,
   runEval,
+  updateEval,
 } from './evals.js';
-import { runFlows } from './flows.js';
+import {
+  auditFlow,
+  createFlow,
+  deleteFlow,
+  getFlowDetail,
+  listFlows,
+  runFlows,
+  updateFlow,
+} from './flows.js';
 import { runImprover } from './improver.js';
 import { collectTraceIds, otlpEnvelopeSchema, TraceNormalizeError, upsertTrace } from './ingest.js';
 import { providerAvailability, resolveLlm, resolveLlmConfig } from './llm.js';
@@ -74,29 +91,77 @@ const listQuerySchema = z.object({
   agent: z.string().trim().max(200).optional(),
   /** `error` → only error traces; `ok` → only ok traces; omitted → all. */
   status: z.enum(['error', 'ok']).optional(),
+  /** Only traces that are members of this flow. */
+  flow: z.string().trim().max(100).optional(),
 });
 
-/** Body contract for POST /api/discovery/run — an optional sample-size override. */
+/** Body contract for POST /api/discovery/run — optional sample-size override + flow scope. */
 const discoveryBodySchema = z.object({
   sampleSize: z.coerce.number().int().min(1).max(200).optional(),
+  flowId: z.string().trim().min(1).max(100).optional(),
 });
 
 /**
  * Body contract for POST /api/evals — either "save from a deviation"
- * (`{ deviationId }`) or a hand-written eval (`{ label, rule, description? }`).
+ * (`{ deviationId }`) or a hand-written eval (`{ label, rule, … }`), both
+ * optionally scoped to a flow (with autorun tuning on the hand-written shape).
  */
 const createEvalBodySchema = z.union([
-  z.object({ deviationId: z.string().trim().min(1) }),
+  z.object({
+    deviationId: z.string().trim().min(1),
+    flowId: z.string().trim().min(1).max(100).optional(),
+  }),
   z.object({
     label: z.string().trim().min(1).max(200),
     rule: z.string().trim().min(1).max(2000),
     description: z.string().trim().max(2000).optional(),
+    flowId: z.string().trim().min(1).max(100).optional(),
+    autorun: z.boolean().optional(),
+    autorunThreshold: z.number().int().min(1).max(1000).optional(),
   }),
 ]);
 
-/** Body contract for POST /api/evals/:id/run — an optional sample-size override. */
+/** Body contract for PATCH /api/evals/:id — flow binding + autorun tuning. */
+const evalPatchSchema = z.object({
+  flowId: z.string().trim().min(1).max(100).nullable().optional(),
+  autorun: z.boolean().optional(),
+  autorunThreshold: z.number().int().min(1).max(1000).optional(),
+});
+
+/** Body contract for POST /api/evals/:id/run — optional sample-size + judge-model overrides. */
 const evalRunBodySchema = z.object({
   sampleSize: z.coerce.number().int().min(1).max(200).optional(),
+  model: z.string().trim().min(1).max(200).optional(),
+});
+
+/** Body contract for POST /api/flows — a durable flow definition (selector and/or rule). */
+const flowCreateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  description: z.string().trim().max(2000).optional(),
+  selector: flowSelectorSchema.nullish(),
+  rule: z.string().trim().min(1).max(2000).nullish(),
+  classify: z.enum(['selector', 'llm']).optional(),
+  createdBy: z.enum(['user', 'claude']).optional(),
+});
+
+/** Body contract for PATCH /api/flows/:id — a partial definition update. */
+const flowPatchSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  description: z.string().trim().max(2000).optional(),
+  selector: flowSelectorSchema.nullable().optional(),
+  rule: z.string().trim().min(1).max(2000).nullable().optional(),
+  classify: z.enum(['selector', 'llm']).optional(),
+  status: z.enum(['active', 'archived']).optional(),
+});
+
+/** Query-string contract for GET /api/flows — active by default. */
+const flowListQuerySchema = z.object({
+  status: z.enum(['active', 'archived', 'all']).default('active'),
+});
+
+/** Query-string contract for GET /api/runs. */
+const runListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(20),
 });
 
 /** Body contract for POST /api/replay — an edited LLM request to re-issue (free-text). */
@@ -125,6 +190,16 @@ const MIN_BUCKET_MS = 60_000;
 const RUN_TIMEOUT_MS = (() => {
   const raw = Number(process.env.GLASSRAY_RUN_TIMEOUT_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : 600_000;
+})();
+
+/**
+ * Debounce (ms) between the last ingest and the background classify sweep, so
+ * a burst of traces triggers one sweep rather than one per POST. Overridable
+ * via GLASSRAY_CLASSIFY_DEBOUNCE_MS (tests set it low).
+ */
+const CLASSIFY_DEBOUNCE_MS = (() => {
+  const raw = Number(process.env.GLASSRAY_CLASSIFY_DEBOUNCE_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 5_000;
 })();
 
 /** Upper bound on rows scanned for the timeline (a wedge cap — newest-first). */
@@ -228,6 +303,10 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
   });
 
   app.addHook('onClose', async () => {
+    // Stop background scheduling first, then abort any executing run so its
+    // provider call doesn't outlive the datastore it writes to.
+    if (classifyTimer) clearTimeout(classifyTimer);
+    activeRun?.abort.abort();
     tail.close();
     await runtime.client.close();
   });
@@ -256,12 +335,12 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     // Ingest each trace independently: one malformed span shouldn't 500 the
     // request (leaking zod internals) or reject a batch's other, valid traces.
     // A bad trace is skipped + logged; the request succeeds if any trace landed.
-    let ingested = 0;
+    const landed: string[] = [];
     for (const traceId of traceIds) {
       try {
         await upsertTrace(db, traceId, envelope, buildTraceView);
         tail.broadcast(traceId);
-        ingested += 1;
+        landed.push(traceId);
       } catch (err) {
         // Only a normalization failure is the trace's fault (skip it). Anything
         // else — a datastore error, say — is a real server failure: surface it as
@@ -273,8 +352,18 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
         req.log.warn({ traceId, err: err.cause }, 'skipped a trace with malformed OTLP spans');
       }
     }
-    if (traceIds.length > 0 && ingested === 0) {
+    if (traceIds.length > 0 && landed.length === 0) {
       return reply.code(400).send({ error: 'no traces could be ingested (malformed OTLP spans)' });
+    }
+    if (landed.length > 0) {
+      // Freshness pass (selector flows) + watermark sweep — classification must
+      // never fail an ingest that already committed.
+      try {
+        await classifyTracesInline(db, landed);
+      } catch (err) {
+        req.log.warn({ err }, 'inline flow classification failed');
+      }
+      scheduleClassifySweep();
     }
     return reply.code(200).send({});
   };
@@ -298,7 +387,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     if (!query.success) {
       return reply.code(400).send({ error: 'invalid limit/offset query parameters' });
     }
-    const { limit, offset, q, agent, status } = query.data;
+    const { limit, offset, q, agent, status, flow } = query.data;
     // Compose the active filters into one WHERE (undefined clauses drop out).
     const clauses: SQL[] = [];
     if (q) {
@@ -307,6 +396,14 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     }
     if (agent) clauses.push(eq(traces.agent, agent));
     if (status) clauses.push(eq(traces.status, status));
+    if (flow) {
+      clauses.push(
+        inArray(
+          traces.id,
+          db.select({ id: flowTraces.traceId }).from(flowTraces).where(eq(flowTraces.flowId, flow)),
+        ),
+      );
+    }
     const where = clauses.length > 0 ? and(...clauses) : undefined;
     const [items, totalRows] = await Promise.all([
       db
@@ -426,23 +523,36 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     void req;
   });
 
-  // ── M3: local discovery + flows ────────────────────────────────────────────
-  // In-memory single-run lock shared across discovery + flows: at most one
-  // background run at a time (a wedge — no durable queue). Reserved SYNCHRONOUSLY
-  // (before the createRun await) so two concurrent POSTs can't both pass the guard.
-  let activeRunId: string | null = null;
-  // Cancel handle for the in-flight run's LLM calls, paired with `activeRunId`.
-  // Aborting it stops the current provider request (and its spend) immediately,
-  // rather than only after the runner reaches its next `isRunLive` loop check.
-  let activeAbort: AbortController | null = null;
+  // ── background run queue ─────────────────────────────────────────────────
+  // One run executes at a time (PGlite is single-process; the analysis passes
+  // parallelize internally via judgeInWaves). Everything else — user POSTs and
+  // server-initiated work (classify sweeps, autorun eval runs) alike — waits in
+  // an in-memory FIFO with per-key dedup. Deliberately not durable: a crash
+  // loses only pending entries, boot reconcile fails the orphaned rows, and
+  // classification re-derives its backlog from `classified_at`.
+
+  /** One run waiting in the FIFO. */
+  type QueueEntry = {
+    runId: string;
+    /** Dedup key — at most one pending-or-active run per key (e.g. 'classify', 'eval:<id>'). */
+    key: string;
+    /** Starts the runner once the run reaches the front of the queue. */
+    start: (runId: string, signal: AbortSignal) => Promise<unknown>;
+  };
+
+  const pendingRuns: QueueEntry[] = [];
+  let activeRun: { runId: string; key: string; abort: AbortController } | null = null;
+
+  /** The runId already pending/active under `key`, if any (the dedup lookup). */
+  const findRunByKey = (key: string): string | undefined =>
+    activeRun?.key === key ? activeRun.runId : pendingRuns.find((p) => p.key === key)?.runId;
 
   /**
-   * Own a background run's lifetime: release the single-run lock when it settles,
-   * and — if RUN_TIMEOUT_MS is set — mark it errored should it stall past the
-   * limit (a hung LLM call), so the lock frees and the UI stops spinning. On
-   * timeout it also aborts the run's controller, so the stuck provider call is
-   * cut off rather than left running. A late finish by the abandoned runner
-   * no-ops (its finalisers are `running`-guarded).
+   * Own the executing run's lifetime: when it settles, release the active slot
+   * and pump the queue. If RUN_TIMEOUT_MS is set and the run stalls past it (a
+   * hung LLM call), mark it errored, abort its provider call, and release the
+   * slot immediately — the zombie's late finalisers no-op (`running`-guarded)
+   * and its late settle only triggers a harmless extra pump.
    */
   const superviseRun = (runId: string, work: Promise<unknown>, controller: AbortController): void => {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -467,64 +577,117 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
       })
       .finally(() => {
         if (timer) clearTimeout(timer);
-        if (activeRunId === runId) {
-          activeRunId = null;
-          activeAbort = null;
-        }
+        if (activeRun?.runId === runId) activeRun = null;
+        pump();
       });
+  };
+
+  /** Advance the queue: claim the next queued run and start it (no-op while one is active). */
+  const pump = (): void => {
+    if (activeRun !== null) return;
+    const next = pendingRuns.shift();
+    if (!next) return;
+    const abort = new AbortController();
+    // Reserve the slot synchronously — the event loop can't interleave another
+    // pump between this assignment and the async claim below.
+    activeRun = { runId: next.runId, key: next.key, abort };
+    void (async () => {
+      // A run canceled while queued is already finalized — skip it.
+      const claimed = await claimQueuedRun(db, next.runId).catch(() => false);
+      if (!claimed) {
+        if (activeRun?.runId === next.runId) activeRun = null;
+        pump();
+        return;
+      }
+      superviseRun(next.runId, next.start(next.runId, abort.signal), abort);
+    })();
+  };
+
+  /**
+   * In-flight enqueue promises per key: reserved synchronously so two
+   * concurrent POSTs for the same key can't both create a run row while the
+   * first `createRun` is still awaiting.
+   */
+  const inflightEnqueues = new Map<string, Promise<{ runId: string; status: 'queued' | 'running' }>>();
+
+  /** Enqueue a background run (deduped by key) and return its id + queue state. */
+  const enqueueRun = (
+    kind: RunKind,
+    key: string,
+    start: (runId: string, signal: AbortSignal) => Promise<unknown>,
+  ): Promise<{ runId: string; status: 'queued' | 'running' }> => {
+    const existing = findRunByKey(key);
+    if (existing !== undefined) {
+      return Promise.resolve({
+        runId: existing,
+        status: activeRun?.runId === existing ? ('running' as const) : ('queued' as const),
+      });
+    }
+    const inflight = inflightEnqueues.get(key);
+    if (inflight) return inflight;
+    const created = (async () => {
+      const runId = await createRun(db, kind, 'queued');
+      pendingRuns.push({ runId, key, start });
+      pump();
+      return {
+        runId,
+        status: activeRun?.runId === runId ? ('running' as const) : ('queued' as const),
+      };
+    })().finally(() => inflightEnqueues.delete(key));
+    inflightEnqueues.set(key, created);
+    return created;
+  };
+
+  // ── background classification + autorun triggers ──────────────────────────
+
+  /** After a sweep: enqueue a run for every flow-scoped eval past its new-member threshold. */
+  const enqueueAutorunEvals = async (): Promise<void> => {
+    const due = await autorunDueEvals(db);
+    for (const d of due) {
+      await enqueueRun('eval', `eval:${d.id}`, (runId, signal) => runEval(db, { evalId: d.id, runId, signal }));
+    }
+  };
+
+  /** Enqueue the classify sweep now (deduped), chaining the autorun check after it. */
+  const enqueueClassifySweep = (): Promise<unknown> =>
+    enqueueRun('classify', 'classify', async (runId, signal) => {
+      await runClassifySweep(db, { runId, signal });
+      await enqueueAutorunEvals().catch(() => {});
+    });
+
+  let classifyTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** Debounced sweep scheduling — one sweep after an ingest burst settles. */
+  const scheduleClassifySweep = (): void => {
+    if (classifyTimer) clearTimeout(classifyTimer);
+    classifyTimer = setTimeout(() => {
+      classifyTimer = null;
+      void enqueueClassifySweep().catch(() => {});
+    }, CLASSIFY_DEBOUNCE_MS);
+    classifyTimer.unref?.();
   };
 
   app.post('/api/discovery/run', async (req, reply) => {
     const parsed = discoveryBodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return reply.code(400).send({ error: 'invalid body: expected { sampleSize?: number }' });
+      return reply.code(400).send({ error: 'invalid body: expected { sampleSize?: number, flowId?: string }' });
     }
-    if (activeRunId !== null) {
-      // Only surface a real run id — during the reservation window `activeRunId`
-      // is the empty-string sentinel, which is not a pollable run.
-      return reply
-        .code(409)
-        .send({ error: 'a run is already in progress', ...(activeRunId ? { runId: activeRunId } : {}) });
+    const { sampleSize, flowId } = parsed.data;
+    if (flowId) {
+      const rows = await db.select({ id: flows.id }).from(flows).where(eq(flows.id, flowId)).limit(1);
+      if (!rows[0]) return reply.code(404).send({ error: 'flow not found' });
     }
-    activeRunId = ''; // reserve the lock before the first await (race-free)
-    try {
-      const runId = await createRun(db, 'discovery');
-      activeRunId = runId;
-      const controller = new AbortController();
-      activeAbort = controller;
-      superviseRun(
-        runId,
-        runDiscovery(db, { runId, sampleSize: parsed.data.sampleSize, signal: controller.signal }),
-        controller,
-      );
-      return reply.code(202).send({ runId });
-    } catch {
-      activeRunId = null;
-      activeAbort = null;
-      return reply.code(500).send({ error: 'failed to start discovery run' });
-    }
+    const res = await enqueueRun(
+      'discovery',
+      flowId ? `discovery:${flowId}` : 'discovery',
+      (runId, signal) => runDiscovery(db, { runId, sampleSize, flowId, signal }),
+    );
+    return reply.code(202).send(res);
   });
 
   app.post('/api/flows/run', async (_req, reply) => {
-    if (activeRunId !== null) {
-      // Only surface a real run id — the reservation-window sentinel is not pollable.
-      return reply
-        .code(409)
-        .send({ error: 'a run is already in progress', ...(activeRunId ? { runId: activeRunId } : {}) });
-    }
-    activeRunId = ''; // reserve the lock before the first await (race-free)
-    try {
-      const runId = await createRun(db, 'flows');
-      activeRunId = runId;
-      const controller = new AbortController();
-      activeAbort = controller;
-      superviseRun(runId, runFlows(db, { runId, signal: controller.signal }), controller);
-      return reply.code(202).send({ runId });
-    } catch {
-      activeRunId = null;
-      activeAbort = null;
-      return reply.code(500).send({ error: 'failed to start flows run' });
-    }
+    const res = await enqueueRun('flows', 'flows', (runId, signal) => runFlows(db, { runId, signal }));
+    return reply.code(202).send(res);
   });
 
   app.get('/api/runs/:id', async (req, reply) => {
@@ -547,21 +710,51 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     return row;
   });
 
+  app.get('/api/runs', async (req, reply) => {
+    const query = runListQuerySchema.safeParse(req.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid limit query parameter' });
+    const items = await db
+      .select({
+        id: runs.id,
+        kind: runs.kind,
+        status: runs.status,
+        error: runs.error,
+        stats: runs.stats,
+        startedAt: runs.startedAt,
+        finishedAt: runs.finishedAt,
+      })
+      .from(runs)
+      .orderBy(desc(runs.startedAt), desc(runs.id))
+      .limit(query.data.limit);
+    return { items };
+  });
+
   app.post('/api/runs/:id/cancel', async (req, reply) => {
     const id = (req.params as { id: string }).id;
-    // Only the single in-flight run can be canceled ('' is the reservation window).
-    if (activeRunId === null || activeRunId === '' || activeRunId !== id) {
-      return reply.code(409).send({ error: 'that run is not currently in progress' });
+    // The executing run: finalize it (running-guarded — its late finalisers
+    // no-op and it won't persist, per its isRunLive checks), abort the in-flight
+    // provider call, and free the slot now so the queue advances immediately.
+    if (activeRun?.runId === id) {
+      // Capture the controller BEFORE the await: the run can settle on its own
+      // during failRun's I/O, in which case superviseRun releases the slot and
+      // pumps the next run into `activeRun` — which must not be touched here.
+      const { abort } = activeRun;
+      await failRun(db, id, 'canceled').catch(() => {});
+      abort.abort(); // no-op if the run already settled
+      if (activeRun?.runId === id) {
+        activeRun = null;
+        pump();
+      }
+      return reply.code(200).send({});
     }
-    // Mark it errored (running-guarded) and free the lock now; the abandoned
-    // runner's late finalisers no-op, and it won't persist (its isRunLive check).
-    // Then abort the in-flight provider call so the run stops spending at once,
-    // instead of only when the runner reaches its next `isRunLive` loop check.
-    await failRun(db, id, 'canceled').catch(() => {});
-    activeAbort?.abort();
-    activeRunId = null;
-    activeAbort = null;
-    return reply.code(200).send({});
+    // A run still waiting in the FIFO: drop the entry and finalize its row.
+    const queuedIndex = pendingRuns.findIndex((p) => p.runId === id);
+    if (queuedIndex >= 0) {
+      pendingRuns.splice(queuedIndex, 1);
+      await failRun(db, id, 'canceled').catch(() => {});
+      return reply.code(200).send({});
+    }
+    return reply.code(409).send({ error: 'that run is not currently in progress or queued' });
   });
 
   app.get('/api/deviations', async () => {
@@ -616,25 +809,10 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     const id = (req.params as { id: string }).id;
     const exists = await db.select({ id: deviations.id }).from(deviations).where(eq(deviations.id, id)).limit(1);
     if (!exists[0]) return reply.code(404).send({ error: 'deviation not found' });
-    // Share the single-run lock with discovery/flows/eval — one background run at a time.
-    if (activeRunId !== null) {
-      return reply
-        .code(409)
-        .send({ error: 'a run is already in progress', ...(activeRunId ? { runId: activeRunId } : {}) });
-    }
-    activeRunId = ''; // reserve the lock before the first await (race-free)
-    try {
-      const runId = await createRun(db, 'improver');
-      activeRunId = runId;
-      const controller = new AbortController();
-      activeAbort = controller;
-      superviseRun(runId, runImprover(db, { deviationId: id, runId, signal: controller.signal }), controller);
-      return reply.code(202).send({ runId });
-    } catch {
-      activeRunId = null;
-      activeAbort = null;
-      return reply.code(500).send({ error: 'failed to start fix generation' });
-    }
+    const res = await enqueueRun('improver', `fix:${id}`, (runId, signal) =>
+      runImprover(db, { deviationId: id, runId, signal }),
+    );
+    return reply.code(202).send(res);
   });
 
   app.post('/api/deviations/:id/resolve', async (req, reply) => {
@@ -659,58 +837,136 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     return reply.code(200).send({ status: 'open' });
   });
 
-  app.get('/api/flows', async () => {
-    // The flows of the most recent flows run (identified by the newest flow row).
-    const latest = await db
-      .select({ runId: flows.runId })
-      .from(flows)
-      .orderBy(desc(flows.createdAt))
-      .limit(1);
-    const runId = latest[0]?.runId ?? null;
-    const items = runId
-      ? await db
-          .select({
-            id: flows.id,
-            name: flows.name,
-            description: flows.description,
-            traceCount: flows.traceCount,
-          })
-          .from(flows)
-          .where(eq(flows.runId, runId))
-          .orderBy(desc(flows.traceCount), desc(flows.id))
-      : [];
-    return { items, runId };
+  // ── durable flows: CRUD + audit ────────────────────────────────────────────
+
+  app.get('/api/flows', async (req, reply) => {
+    const query = flowListQuerySchema.safeParse(req.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid status query parameter' });
+    const [items, unclassified] = await Promise.all([listFlows(db, query.data.status), countUnclassified(db)]);
+    return { items, unclassified };
+  });
+
+  app.post('/api/flows', async (req, reply) => {
+    const parsed = flowCreateSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'invalid body: expected { name, description?, selector?, rule?, classify? }' });
+    }
+    const { name, description, selector, rule, classify, createdBy } = parsed.data;
+    if (!selector && !rule) {
+      return reply.code(400).send({ error: 'a flow needs a selector, a rule, or both' });
+    }
+    if (classify === 'llm' && !rule) {
+      return reply.code(400).send({ error: 'an llm-classified flow needs a rule' });
+    }
+    if (classify === 'selector' && !selector) {
+      return reply.code(400).send({ error: 'a selector-classified flow needs a selector' });
+    }
+    const created = await createFlow(db, {
+      name,
+      description,
+      selector: selector ?? null,
+      rule: rule ?? null,
+      classify,
+      createdBy,
+    });
+    // A rule-defined flow reconsiders the newest traces (bounded backfill).
+    let llmBackfill = 0;
+    if (created.classify === 'llm') {
+      llmBackfill = await resetClassificationForBackfill(db);
+      scheduleClassifySweep();
+    }
+    return reply.code(201).send({ id: created.id, memberCount: created.memberCount, llmBackfill });
   });
 
   app.get('/api/flows/:id', async (req, reply) => {
     const id = (req.params as { id: string }).id;
-    const rows = await db.select().from(flows).where(eq(flows.id, id)).limit(1);
-    const flow = rows[0];
-    if (!flow) return reply.code(404).send({ error: 'flow not found' });
-    const traceRows = await db
-      .select({ traceId: flowTraces.traceId, name: traces.name, agent: traces.agent })
-      .from(flowTraces)
-      .leftJoin(traces, eq(flowTraces.traceId, traces.id))
-      .where(eq(flowTraces.flowId, id));
-    return { flow, traces: traceRows };
+    const detail = await getFlowDetail(db, id);
+    if (!detail) return reply.code(404).send({ error: 'flow not found' });
+    return detail;
+  });
+
+  app.patch('/api/flows/:id', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const parsed = flowPatchSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'invalid body: expected { name?, description?, selector?, rule?, classify?, status? }' });
+    }
+    const result = await updateFlow(db, id, parsed.data);
+    if (!result.ok) {
+      if (result.reason === 'not-found') return reply.code(404).send({ error: 'flow not found' });
+      return reply.code(400).send({
+        error:
+          result.reason === 'llm-needs-rule'
+            ? 'an llm-classified flow needs a rule'
+            : 'a selector-classified flow needs a selector',
+      });
+    }
+    if (result.llmDefinitionChanged) {
+      await resetClassificationForBackfill(db);
+      scheduleClassifySweep();
+    }
+    return getFlowDetail(db, id);
+  });
+
+  app.delete('/api/flows/:id', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const deleted = await deleteFlow(db, id);
+    if (!deleted) return reply.code(404).send({ error: 'flow not found' });
+    return reply.code(200).send({});
+  });
+
+  app.get('/api/flows/:id/audit', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const audit = await auditFlow(db, id);
+    if (!audit) return reply.code(404).send({ error: 'flow not found' });
+    return audit;
   });
 
   // ── M6: deviations → repeatable evals ──────────────────────────────────────
+
+  /** 404-guard for an optional flow binding on eval create/patch. */
+  const flowExists = async (flowId: string): Promise<boolean> => {
+    const rows = await db.select({ id: flows.id }).from(flows).where(eq(flows.id, flowId)).limit(1);
+    return rows.length > 0;
+  };
 
   app.post('/api/evals', async (req, reply) => {
     const parsed = createEvalBodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
       return reply
         .code(400)
-        .send({ error: 'invalid body: expected { deviationId } or { label, rule, description? }' });
+        .send({ error: 'invalid body: expected { deviationId, flowId? } or { label, rule, description?, flowId?, autorun?, autorunThreshold? }' });
+    }
+    if (parsed.data.flowId && !(await flowExists(parsed.data.flowId))) {
+      return reply.code(404).send({ error: 'flow not found' });
     }
     if ('deviationId' in parsed.data) {
-      const id = await createEvalFromDeviation(db, parsed.data.deviationId);
+      const id = await createEvalFromDeviation(db, parsed.data.deviationId, { flowId: parsed.data.flowId });
       if (id === null) return reply.code(404).send({ error: 'deviation not found' });
       return reply.code(201).send({ id });
     }
     const id = await createManualEval(db, parsed.data);
     return reply.code(201).send({ id });
+  });
+
+  app.patch('/api/evals/:id', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const parsed = evalPatchSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'invalid body: expected { flowId?, autorun?, autorunThreshold? }' });
+    }
+    if (parsed.data.flowId && !(await flowExists(parsed.data.flowId))) {
+      return reply.code(404).send({ error: 'flow not found' });
+    }
+    const updated = await updateEval(db, id, parsed.data);
+    if (!updated) return reply.code(404).send({ error: 'eval not found' });
+    return getEvalDetail(db, id);
   });
 
   app.get('/api/evals', async () => {
@@ -736,36 +992,15 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     const evalId = (req.params as { id: string }).id;
     const parsed = evalRunBodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return reply.code(400).send({ error: 'invalid body: expected { sampleSize?: number }' });
+      return reply.code(400).send({ error: 'invalid body: expected { sampleSize?: number, model?: string }' });
     }
-    // Share the single-run lock with discovery/flows — one background run at a time.
-    if (activeRunId !== null) {
-      return reply
-        .code(409)
-        .send({ error: 'a run is already in progress', ...(activeRunId ? { runId: activeRunId } : {}) });
-    }
-    activeRunId = ''; // reserve the lock BEFORE the awaited eval lookup (race-free)
-    try {
-      const rows = await db.select({ id: evals.id }).from(evals).where(eq(evals.id, evalId)).limit(1);
-      if (!rows[0]) {
-        activeRunId = null;
-        return reply.code(404).send({ error: 'eval not found' });
-      }
-      const runId = await createRun(db, 'eval');
-      activeRunId = runId;
-      const controller = new AbortController();
-      activeAbort = controller;
-      superviseRun(
-        runId,
-        runEval(db, { evalId, runId, sampleSize: parsed.data.sampleSize, signal: controller.signal }),
-        controller,
-      );
-      return reply.code(202).send({ runId });
-    } catch {
-      activeRunId = null;
-      activeAbort = null;
-      return reply.code(500).send({ error: 'failed to start eval run' });
-    }
+    const rows = await db.select({ id: evals.id }).from(evals).where(eq(evals.id, evalId)).limit(1);
+    if (!rows[0]) return reply.code(404).send({ error: 'eval not found' });
+    const { sampleSize, model } = parsed.data;
+    const res = await enqueueRun('eval', `eval:${evalId}`, (runId, signal) =>
+      runEval(db, { evalId, runId, sampleSize, model, signal }),
+    );
+    return reply.code(202).send(res);
   });
 
   app.get('/api/llm', async () => resolveLlm());
@@ -845,6 +1080,10 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
       reply.type('text/plain').send('UI not built — run npm run build:ui'),
     );
   }
+
+  // Sweep anything that landed while the server was down (or was never swept) —
+  // classification self-heals its backlog from the `classified_at` watermark.
+  if ((await countUnclassified(db)) > 0) void enqueueClassifySweep().catch(() => {});
 
   return app;
 };

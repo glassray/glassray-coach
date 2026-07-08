@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   DeviationItem,
   EvalSummary,
-  FlowItem,
+  FlowSummary,
   Info,
   StatsResponse,
   TimelineResponse,
@@ -33,7 +33,7 @@ interface OverviewData {
   timeline: TimelineResponse;
   deviations: DeviationItem[];
   evals: EvalSummary[];
-  flows: FlowItem[];
+  flows: FlowSummary[];
   recent: TraceListItem[];
   usage: UsageSummary;
 }

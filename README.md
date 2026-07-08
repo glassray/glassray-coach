@@ -4,76 +4,42 @@
 
 [![npm](https://img.shields.io/npm/v/@glassray/coach.svg)](https://www.npmjs.com/package/@glassray/coach)
 
-A fully self-contained **local** AI-agent debugger. One process, one embedded
-database, zero cloud: point any OTLP-speaking agent at it, watch traces land live,
-then **discover** the recurring ways it misbehaves, **generate a fix** for your
-coding agent, and **lock the rule in as an eval** — all on your own machine.
+A fully self-contained **local** AI-agent debugger. One process, one embedded database, zero cloud: point any
+OTLP-speaking agent at it, watch traces land live, then **discover** the recurring ways it misbehaves,
+**generate a fix** for your coding agent, and **lock the rule in as an eval** — all on your own machine, in the
+same warm-paper design language as the hosted Glassray dashboard (Coach is the local, try-before-cloud edition).
 
 ```sh
-npx @glassray/coach
+npx @glassray/coach start
 ```
 
-- **Ingest** — OTLP/JSON over HTTP at `POST /v1/traces` (alias:
-  `POST /api/public/otel/v1/traces`), bearer-authed with a locally generated key.
-- **Overview** — a live dashboard landing: a trace-volume-over-time chart (error share
-  highlighted), headline KPIs (traces / error rate / tokens / est. cost / p95 latency), a
-  deviation-severity distribution, an eval health rollup, recent traces, and an **LLM
-  usage** meter (Coach's own metered spend vs. the budget, per model) — all
-  auto-refreshing on the tail feed.
-- **View** — a Vite React SPA (in `web/`) served by the same Fastify process, with a
-  live `/api/tail` SSE feed and a full span-tree waterfall + inspector. The sidebar nav
-  is **Overview · Traces · Deviations · Evals · Flows**, plus a **Settings** page for
-  choosing the LLM provider, the heavy/light model ids, and the spend budget from
-  dropdowns (persisted to `settings.json`, `chmod 0600`; API keys stay in the env).
-- **Discover** — an LLM judge finds where each agent run went wrong, then clusters the
-  findings into recurring **deviation types** (each with a plain-language rule).
-  Discovery, eval, and flow runs show **live progress** and can be **cancelled**
-  mid-flight; a run that finds no deviations reports that honestly.
-- **Fix** — the **self-healing loop**: click **Generate fix** on a deviation and Coach
-  writes one concrete fix as a paste-into-your-coding-agent instruction doc (a Goal, a
-  repo search plan with grep commands, the likely files, ordered edits across prompt /
-  tools / guardrails / code, and acceptance criteria). Apply it in Claude Code / Cursor,
-  then mark the deviation **resolved** once an eval confirms it holds.
-- **Evals** — turn any deviation, a hand-written rule, or a single trace (a **Save as
-  eval** button on the trace detail, pre-filled from that trace) into a **repeatable**
-  pass/fail check; re-run it over new traces and watch for **regressions** (a trace that
-  passed last run and now fails).
-- **Flows** — groups your traces into the recurring **workflows** your agents run.
-- **Replay** — open any **LLM span** in the viewer, edit its model / system / prompt /
-  temperature, and re-issue it through the same local LLM core — the fresh completion
-  lands beside the original. The viewer becomes a debugger.
-- **Store** — [PGlite](https://pglite.dev) (embedded Postgres + pgvector) via Drizzle.
-
-Same warm-paper design language as the hosted Glassray dashboard. Coach is the
-local, try-before-cloud edition — the analysis runs against your `~/.claude`
-subscription (zero-config, no API key) or a metered key, or a deterministic `mock`
-provider that makes the whole tool **fully airgap-safe**.
-
 > Coach lives in its own repo — [`glassray/glassray-coach`](https://github.com/glassray/glassray-coach) —
-> and is consumed by the Glassray monorepo as a git submodule. It's a plain npm
-> project (use `npm`, not `pnpm`) with zero `@helix/*` dependencies; the trace-analysis
-> code it shares with the hosted app is vendored in (`server/vendor/`) and refreshed
-> by re-copying.
+> and is consumed by the Glassray monorepo as a git submodule. It's a plain npm project (use `npm`, not `pnpm`)
+> with zero `@helix/*` dependencies; the trace-analysis code it shares with the hosted app is vendored in (`server/vendor/`) and refreshed by re-copying.
+
+## What you get
+
+- **Ingest** — OTLP/JSON at `POST /v1/traces` (alias `/api/public/otel/v1/traces`), bearer-authed with a locally generated key.
+- **Live viewer + replay** — a tail-fed dashboard (Overview KPIs + activity chart + deviation/eval rollups, span waterfall + inspector); edit any LLM span's model / system / prompt / temperature and re-issue it beside the original.
+- **Discovery** — an LLM judge clusters where each run went wrong into recurring **deviation types**, each with a plain-language rule; flow-scopeable, honest when it finds nothing.
+- **Durable flows** — behaviours defined by a deterministic selector and/or a plain-language rule; selectors match inline at ingest, rules via a debounced **background classification** sweep, and a discover pass bootstraps candidates from existing traffic.
+- **Flow-scoped autorun evals** — freeze a deviation, a hand-written rule, or a single trace into a repeatable pass/fail check; runs sample the flow's newest members, autorun re-queues on fresh traffic, regressions (passed → fails) are flagged.
+- **Fix generation** — one paste-into-your-coding-agent instruction doc per deviation: a goal, a grep-driven repo search plan, likely files, ordered edits across prompt / tools / guardrails / code, acceptance criteria.
+- **Agent-first CLI + skill** — every data command prints the API's JSON verbatim; `glassray init` ships a skill that teaches your coding agent the whole loop.
+- **PGlite store** — embedded Postgres + pgvector ([PGlite](https://pglite.dev)) via Drizzle; no external services.
+
+The loop:
+1. **See** — traces land live in the viewer as your agent runs.
+2. **Find** — discovery clusters its recurring failures into deviation types.
+3. **Scope** — pin the behaviours that matter as flows; freeze their rules as evals.
+4. **Fix** — generate the fix doc; apply it in Claude Code / Cursor.
+5. **Verify** — re-run the eval over fresh traces; mark the deviation resolved.
 
 ## Quickstart
 
-Requires **Node 20.6+** (`glassray doctor` checks the Node version, the port, and
-data-dir writability for you). Prefer a guided tour? See
-[`GETTING_STARTED.md`](./GETTING_STARTED.md). One command — no clone, no install:
-
-```sh
-npx @glassray/coach
-```
-
-Or install it globally:
-
-```sh
-npm i -g @glassray/coach
-glassray                # = "glassray start"
-```
-
-`start` boots the server on `http://127.0.0.1:5899/`, prints the dashboard URL, the
-ingest endpoint, your local API key, and a copy-paste OTLP exporter block:
+Requires **Node 20.6+** (`glassray doctor` checks the Node version, the port, and data-dir writability for you).
+Prefer a guided tour? See [`GETTING_STARTED.md`](./GETTING_STARTED.md). One command — no clone, no install:
+`npx @glassray/coach start` (or `npm i -g @glassray/coach`, then `glassray start`) boots the server on `http://127.0.0.1:5899/` and prints the dashboard URL, the ingest endpoint, your local API key, and this copy-paste OTLP exporter block:
 
 ```sh
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:5899"
@@ -81,53 +47,72 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="http/json"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer glsk_local_..."
 ```
 
-Then open **Deviations** and click **Run discovery**. On a deviation, **Generate fix** for
-a paste-into-your-coding-agent set of instructions and **Save as eval** to lock its rule
-in — apply the fix, re-check the eval against fresh traces, and **Mark resolved**. You can
-also **Save as eval** straight from a trace's detail view, write one under **Evals**, or
-map behaviours with **Flows** → **Run flows**.
+Then open **Deviations → Run discovery**; on a deviation, **Generate fix** writes the paste-into-your-coding-agent
+instructions and **Save as eval** locks its rule in (also available on any trace's detail view, or hand-write one
+under **Evals**). Apply the fix, re-check the eval against fresh traces, **Mark resolved** — or run `glassray init` and let your coding agent drive (see below).
 
-No agent handy? `node examples/send-otlp.mjs` sends a realistic sample trace, or reach
-for the fuller [`examples/support-bot/`](./examples/support-bot/) — a simulated agent
-instrumented with the real `@glassray/tracing` SDK, with planted recurring failure modes
-plus a step-by-step walkthrough and demo script (see
-[`examples/support-bot/README.md`](./examples/support-bot/README.md)). See
-[`examples/`](./examples/) for both. To instrument a real agent, use the
-[`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js) SDK (point it at
-Coach with `GLASSRAY_ENDPOINT`) or any OTLP/HTTP exporter — the dashboard's empty state
-has copy-paste recipes for each.
+No agent handy? [`examples/send-otlp.mjs`](./examples/send-otlp.mjs) sends a realistic sample trace;
+[`examples/support-bot/`](./examples/support-bot/) is the fuller demo — a simulated agent on the real
+`@glassray/tracing` SDK with planted recurring failure modes, a walkthrough + demo script ([README](./examples/support-bot/README.md)).
+To instrument a real agent, point the [`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js) SDK (`GLASSRAY_ENDPOINT`) or any OTLP/HTTP exporter at Coach — the dashboard's empty state has copy-paste recipes for each.
 
 ### CLI
 
-| Command                | What it does                                                                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `glassray start`       | Start server + dashboard (default command). Flags: `--port` (default 5899), `--data-dir`, `--no-open`.                                     |
-| `glassray mcp`         | Run a stdio MCP server for coding agents, proxying a **running** coach over loopback. Honours `--port`. See below.                         |
-| `glassray reset --yes` | Wipe the data directory (asks for confirmation without `--yes`).                                                                           |
-| `glassray status`      | Show the data dir and probe whether a coach answers on the port.                                                                           |
-| `glassray doctor`      | Check Node version, port availability, and data-dir writability, with one-line fixes. Creates the data dir if missing (then cleans it up). |
+| Command                           | What it does                                                                                                                                                       |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `glassray start`                  | Start server + dashboard — `--port` (default 5899), `--data-dir`, `--no-open`.                                                                                     |
+| `glassray init`                   | Install the agent skill into `./.agents/skills/` + `./.claude/skills/` (`--force` overwrites) — see below.                                                         |
+| `glassray reset --yes`            | Wipe the data directory (asks for confirmation without `--yes`).                                                                                                   |
+| `glassray status`                 | Show the data dir and probe whether a coach answers on the port.                                                                                                   |
+| `glassray doctor`                 | Check Node version, port, and data-dir writability (creating the dir if missing, then cleaning up), with one-line fixes.                                           |
+| `glassray` / `help` / `--version` | The branded landing screen — server status, every command, guide links; `help <command>` (or `<command> --help`) prints usage; `--version` prints the CLI version. |
 
-### Use it from your coding agent (MCP)
+Data + run commands talk to a **running** coach over loopback and print the API's JSON **verbatim** to
+stdout (errors to stderr; exit `0` ok, `1` API error, `2` no server running); all honour `--port`. The
+long verbs (`discovery run`, `fix`, `evals run`, `flows discover`) block and poll their run to completion —
+`--no-wait` skips that, `--timeout` bounds it; afterwards `evals run` prints the eval detail (verdicts) and `fix` the deviation (with `fixMarkdown`).
 
-With a coach already running, register it as an MCP server so Claude Code / Cursor
-can debug your agent against the real captured traces:
+| Command                                                                                                                          | What it does                                                                          |
+| -------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `glassray traces list [--q --agent --status --flow --limit --offset]` · `traces get <id>` · `traces tail`                          | List/filter traces, fetch one span-tree view, stream ingests as NDJSON.               |
+| `glassray stats` · `usage`                                                                                                         | Traffic rollups + known agent names; Coach's own LLM spend vs the budget.             |
+| `glassray flows list [--status active\|archived\|all]` · `flows get <id>` · `flows audit <id>`                                     | List flows (`{ items, unclassified }`), one flow's detail, its classification audit.  |
+| `glassray flows create --name [--description --rule --classify --selector '<json>' --created-by]`                                  | Create a durable flow (selector and/or rule).                                         |
+| `glassray flows update <id> [--name --description --rule\|--no-rule --classify --selector '<json>'\|--no-selector --status]`       | Update a flow's definition; `--status archived` retires it.                           |
+| `glassray flows delete <id>` · `flows discover [--no-wait --timeout]`                                                              | Delete a flow; bootstrap new rule-defined flows from existing traffic.                |
+| `glassray evals list` · `evals get <id>`                                                                                           | Rollups + regression counts; the detail adds per-trace verdicts + run history.        |
+| `glassray evals create (--deviation <id> [--flow])` · `(--label --rule [--description --flow --no-autorun --autorun-threshold])`   | Freeze a deviation's rule, or hand-write one — optionally flow-scoped.                |
+| `glassray evals update <id> [--flow\|--no-flow --autorun\|--no-autorun --autorun-threshold]`                                       | Move the flow binding / tune autorun (the rule itself is immutable).                  |
+| `glassray evals run <id> [--sample --model --no-wait --timeout]` · `evals delete <id>`                                             | Score the sample against the rule; delete an eval and its verdicts.                   |
+| `glassray deviations list` · `deviations get <id>` · `deviations resolve <id> [--reopen]`                                          | The newest discovery run's findings; flip a deviation open ↔ resolved.                |
+| `glassray discovery run [--sample --flow --no-wait --timeout]`                                                                     | Run deviation discovery, optionally scoped to one flow's members.                     |
+| `glassray fix <deviationId> [--no-wait --timeout]`                                                                                 | Generate the paste-into-your-coding-agent fix for a deviation.                        |
+| `glassray runs list [--limit]` · `runs get <id>` · `runs cancel <id>`                                                              | Inspect the run queue; cancel a queued **or** active run.                             |
+
+### Use it from your coding agent
+
+The CLI is the agent surface. `glassray init` installs an **agent skill** — one SKILL.md in the open
+[Agent Skills](https://agentskills.io) format — at both standard locations: `./.agents/skills/glassray/`
+(OpenAI Codex, VS Code, GitHub Copilot) and `./.claude/skills/glassray/` (Claude Code). It teaches the agent to
+inventory the durable flows/evals, scope your agent's behaviours as flows, derive evals from the rules already written into your prompts and guardrails, and run discover → fix → verify against the local Coach.
 
 ```sh
-claude mcp add glassray -- npx @glassray/coach mcp
+cd your-agent-repo && glassray init    # or: npx skills add glassray/glassray-coach
 ```
 
-The MCP server proxies the running coach over loopback (it never opens the
-database itself), exposing read tools (`list_traces`, `get_trace`, `get_stats`,
-`list_deviations`, `get_deviation`, `list_flows`, `list_evals`, `get_eval`,
-`get_usage`) and action tools (`run_discovery`, `run_flows`, `propose_fix`,
-`resolve_deviation`, `save_eval`, `run_eval`) — enough to run the whole
-discover → fix → verify loop from your editor.
+The latter is the community [`skills` CLI](https://github.com/vercel-labs/skills) — it installs the same skill
+straight from this repo into 70+ agents (Claude Code, Cursor, Codex, Windsurf, Cline, …), picks agents interactively (`-g` for user-wide), and handles updates.
+
+Then ask Claude Code _"set up glassray flows and evals for this agent"_ or _"which traces echoed a full
+card number back to the customer?"_ — every command prints the API's JSON, so the agent reads exactly what the dashboard shows.
+
+> **Migrating from 0.1:** the MCP server is removed — the CLI replaced it. `glassray mcp` prints a
+> removal hint and exits `1`; deregister with `claude mcp remove glassray`, then `glassray init`.
 
 ## The LLM provider
 
-Discovery, fix generation, evals, flows, and replay need a model. The provider is chosen
-by `GLASSRAY_LLM_PROVIDER` (or the dashboard **Settings** page, which persists your choice
-of provider / heavy + light model ids / budget to `settings.json` and overrides the env):
+Discovery, fix generation, evals, flows, and replay need a model — chosen by `GLASSRAY_LLM_PROVIDER`, or the
+dashboard **Settings** page, which persists your provider / heavy + light model ids / budget to `settings.json` (`chmod 0600`; API keys stay in the env) and overrides the env:
 
 | Provider              | Needs                             | Notes                                                                                         |
 | --------------------- | --------------------------------- | --------------------------------------------------------------------------------------------- |
@@ -136,139 +121,89 @@ of provider / heavy + light model ids / budget to `settings.json` and overrides 
 | `openai`              | `OPENAI_API_KEY`                  | Vercel AI SDK (`gpt-4o` / `gpt-4o-mini`).                                                     |
 | `mock`                | nothing                           | **Default with no `~/.claude`.** Deterministic, network-free — the airgap/CI path.            |
 
-Every network SDK is dynamically imported inside its own branch, so the `mock` path
-pulls in nothing beyond zod and node builtins.
+Every network SDK is dynamically imported inside its own branch — the `mock` path pulls in nothing beyond zod and node builtins, keeping the whole tool airgap-safe.
 
-### Spend cap
-
-So a metered API key can't quietly drain your balance while you test, every analysis
-call (discovery / fix / eval / flows / replay) is metered and checked against a budget —
-**`GLASSRAY_LLM_BUDGET_USD`, default `$50`**. Once the accrued metered spend reaches it,
-new runs stop with a clear error until you raise the cap or reset. The free `mock` /
-`claude-subscription` paths accrue `$0` and are never blocked. Set `GLASSRAY_LLM_BUDGET_USD=0`
-for unlimited. The **Overview → LLM usage** card shows spend vs. budget and a per-model
-breakdown (`GET /api/usage`; `POST /api/usage/reset` clears the ledger).
+**Spend cap.** Every metered analysis call (discovery / fix / eval / flows / replay) is checked against
+**`GLASSRAY_LLM_BUDGET_USD`** (default `$50`) — an API key can't quietly drain your balance while you test: at
+the cap, new runs stop with a clear error until you raise it or reset (`0` = unlimited); the free `mock` /
+`claude-subscription` paths accrue `$0` and are never blocked. **Overview → LLM usage** shows spend vs. budget per model (`GET /api/usage`; `POST /api/usage/reset` clears the ledger).
 
 ## Environment variables
 
-Everything has a working default — a fresh checkout runs with none of these set.
-The CLI's `--port` / `--data-dir` flags set `GLASSRAY_PORT` / `GLASSRAY_HOME` for
-you; set them directly when running `npm run dev` / `npm start` outside the CLI.
+Everything has a working default — a fresh checkout runs with none of these set. The CLI's `--port` / `--data-dir`
+flags set `GLASSRAY_PORT` / `GLASSRAY_HOME` for you; set the vars directly when running `npm run dev` / `npm start` outside the CLI.
 
-| Variable                    | Default                                                  | What it does                                                                                                                                       |
-| --------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GLASSRAY_HOME`             | `~/.glassray`                                            | Data directory (DB + local API key).                                                                                                               |
-| `GLASSRAY_PORT` (or `PORT`) | `5899`                                                   | Port the server binds on `127.0.0.1`.                                                                                                              |
-| `GLASSRAY_LLM_PROVIDER`     | `claude-subscription` if `~/.claude` exists, else `mock` | Analysis backend (see above).                                                                                                                      |
-| `GLASSRAY_HEAVY_MODEL_ID`   | `claude-opus-4-8` (`gpt-4o` on openai)                   | Heavy-tier model id — applies to **every** provider.                                                                                               |
-| `GLASSRAY_LIGHT_MODEL_ID`   | `claude-sonnet-4-6` (`gpt-4o-mini` on openai)            | Light-tier model id — applies to **every** provider.                                                                                               |
-| `GLASSRAY_LLM_BUDGET_USD`   | `50`                                                     | Metered spend cap; `0` = unlimited.                                                                                                                |
-| `GLASSRAY_RUN_TIMEOUT_MS`   | `600000`                                                 | Backstop timeout (ms) for a background run — a stalled run is marked errored so the single-run lock frees and the UI stops spinning; `0` disables. |
-| `ANTHROPIC_API_KEY`         | —                                                        | Required by the `anthropic` provider.                                                                                                              |
-| `OPENAI_API_KEY`            | —                                                        | Required by the `openai` provider.                                                                                                                 |
+| Variable                               | Default                                                  | What it does                                                                                                                                |
+| -------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GLASSRAY_HOME`                        | `~/.glassray`                                            | Data directory (DB + local API key).                                                                                                        |
+| `GLASSRAY_PORT` (or `PORT`)            | `5899`                                                   | Port the server binds on `127.0.0.1`.                                                                                                       |
+| `GLASSRAY_LLM_PROVIDER`                | `claude-subscription` if `~/.claude` exists, else `mock` | Analysis backend (see above).                                                                                                               |
+| `GLASSRAY_HEAVY_MODEL_ID`              | `claude-opus-4-8` (`gpt-4o` on openai)                   | Heavy-tier model id — applies to **every** provider.                                                                                        |
+| `GLASSRAY_LIGHT_MODEL_ID`              | `claude-sonnet-4-6` (`gpt-4o-mini` on openai)            | Light-tier model id — applies to **every** provider.                                                                                        |
+| `GLASSRAY_LLM_BUDGET_USD`              | `50`                                                     | Metered spend cap; `0` = unlimited.                                                                                                         |
+| `GLASSRAY_RUN_TIMEOUT_MS`              | `600000`                                                 | Backstop timeout (ms) for a background run — a stalled run is marked errored so the queue advances and the UI stops spinning; `0` disables. |
+| `GLASSRAY_CLASSIFY_DEBOUNCE_MS`        | `5000`                                                   | Debounce (ms) between the last ingest and the background classify sweep, so a burst of traces triggers one sweep rather than one per POST.  |
+| `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` | —                                                        | Required by the matching metered provider.                                                                                                  |
+| `GLASSRAY_NO_UPDATE_CHECK`             | —                                                        | Disable the npm update check entirely (also honors `NO_UPDATE_NOTIFIER` and `CI`).                                                          |
+
+### Update check
+
+Human-facing commands (the landing screen, `start`, `status`, `init`) print a one-line notice when a newer
+`@glassray/coach` is known — a detached background child refreshes a local cache under `$GLASSRAY_HOME` from
+registry.npmjs.org at most once every 24 hours (3s timeout, silent; a non-TTY stdout also skips it), and `glassray doctor` performs the one live, awaited check.
+Opt out with `GLASSRAY_NO_UPDATE_CHECK=1`, `NO_UPDATE_NOTIFIER`, or `CI`. The only data transmitted is the package name in a single HTTPS GET — never from the server or the data commands, so trace data stays zero-egress.
 
 ## Data directory
 
 Everything lives under `$GLASSRAY_HOME` (default `~/.glassray`):
-
 - `data/db/` — the PGlite database (with the `vector` extension loaded).
-- `local-api-key` — the ingest bearer key (`glsk_local_` + 48 hex), generated once,
-  `chmod 0600`.
+- `local-api-key` — the ingest bearer key (`glsk_local_` + 48 hex), generated once, `chmod 0600`.
 
-The schema is bootstrapped at server start with idempotent `CREATE TABLE IF NOT
-EXISTS` SQL (`server/bootstrap.ts`) — there are no migration files.
+The schema is bootstrapped at server start with idempotent `CREATE TABLE IF NOT EXISTS` SQL (`server/bootstrap.ts`) — there are no migration files.
 
 ## HTTP surface
 
-| Route                                          | Auth       | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ---------------------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /v1/traces`                              | Bearer key | OTLP/JSON envelope (`{ resourceSpans: [...] }`), 16 MiB cap, `application/json` — **`content-encoding: gzip`/`deflate`/`br` accepted** (the `@glassray/tracing` SDK gzips payloads ≥ 8 KiB). Spans are **merged into the stored trace by spanId** — a standard OTLP batch exporter that flushes one trace across several POSTs accumulates (incoming spans replace same-id stored spans, new ones append, and stored spans absent from the incoming batch are carried over), so a trace stays whole; the whole-trace-per-POST SDK path is unaffected (same spanIds ⇒ replacement). One malformed trace in a batch is skipped and logged (the batch's other traces still land); a wholly-malformed batch returns `400`; a datastore failure returns `503`. Replies `{}`. |
-| `POST /api/public/otel/v1/traces`              | Bearer key | Alias of the above (matches the Helix cloud ingest path).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `GET /api/info`                                | —          | `{ name, version, ingestEndpoint, apiKey }`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `GET /api/traces?limit&offset&q&agent&status`  | —          | `{ items, total }`, newest-first (offset paginated). `q` = case-insensitive substring on name/agent, `agent` = exact match, `status` = `error`\|`ok`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `GET /api/stats`                               | —          | Totals (traces, tokens, errors, avg/p95 latency, est. cost) + a per-agent breakdown + the known-agents list — powers the Overview KPIs and the MCP `get_stats` tool.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `GET /api/timeline`                            | —          | `{ points: [{ t, traces, errors }], from, to }` — trace volume + errors bucketed into a fixed-width activity series (≥1-minute buckets) ending at the latest trace (the Overview activity chart).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `GET /api/traces/:id`                          | —          | `{ id, view }` — recomputed from the stored raw envelope on every read.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `GET /api/tail`                                | —          | SSE feed: `data: {"id":"<traceId>"}` per ingested trace, heartbeat every 25s.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `GET /api/llm`                                 | —          | `{ provider, ready, reason }` — what discovery/flows will use.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `POST /api/discovery/run`                      | —          | `{ sampleSize? }` → `{ runId }` (`409` if a run is already in progress).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `POST /api/flows/run`                          | —          | → `{ runId }` (same single-run lock).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `GET /api/runs/:id`                            | —          | `{ id, kind, status, error, stats, startedAt, finishedAt }`. While a run is `running`, its `stats` carries live progress `{ scanned, total }` (terminal stats replace it on finish).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `POST /api/runs/:id/cancel`                    | —          | Cancels the in-flight run (`409` if it isn't the active run).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `GET /api/deviations` · `/api/deviations/:id`  | —          | Recurring deviation types + their per-trace examples (label, severity, evidence, trace link). Each carries a `status` (`open`\|`resolved`); the list adds `hasFix`, the detail adds the generated `fixMarkdown` (+ `fixModel`, `fixGeneratedAt`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `POST /api/deviations/:id/fix`                 | —          | Generate a fix for the deviation → `{ runId }` (same single-run lock; `404` if the deviation is unknown). The finished run stores `fixMarkdown` on the deviation row.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `POST /api/deviations/:id/resolve` · `/reopen` | —          | Flip the deviation's `status` between `resolved` and `open`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `GET /api/flows` · `/api/flows/:id`            | —          | Discovered flows + their member traces.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `GET /api/evals` · `/api/evals/:id`            | —          | Saved rules with their latest pass/fail rollup + regression count; the detail adds the per-trace verdicts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `POST /api/evals`                              | —          | `{ deviationId }` (save a deviation) or `{ label, rule, description? }` (hand-written) → `{ id }`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `POST /api/evals/:id/run`                      | —          | `{ sampleSize? }` → `{ runId }` (same single-run lock).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `DELETE /api/evals/:id`                        | —          | Remove an eval and its stored verdicts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `POST /api/replay`                             | —          | `{ prompt, system?, model?, temperature? }` → `{ output, provider, model }` — re-issue an edited LLM call as free text (`402` if the spend cap is reached, `502` if the provider is unreachable).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `GET /api/usage`                               | —          | Coach's own LLM spend vs the budget, broken down by model + kind.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `POST /api/usage/reset`                        | —          | Clear the usage ledger.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `GET /api/settings` · `PATCH /api/settings`    | —          | Read / update the persisted dashboard settings (LLM provider, heavy/light model ids, budget). Saved to `$GLASSRAY_HOME/settings.json` (`chmod 0600`); API keys are never stored here.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `GET /*`                                       | —          | The built SPA (`web/dist`) with SPA fallback; a plain-text hint if the UI isn't built.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-
-The read/analysis API is unauthenticated **by design**: the server binds `127.0.0.1`
-only, and every route enforces a loopback Host/Origin guard (403 otherwise) as a
-DNS-rebinding defense. Do not port-forward it to untrusted networks.
+Ingest is `POST /v1/traces` (alias `POST /api/public/otel/v1/traces`) — OTLP/JSON, bearer-authed with the local
+key. Everything else is unauthenticated **by design**: the server binds `127.0.0.1` only, and every route
+enforces a loopback Host/Origin guard (403 otherwise) as a DNS-rebinding defense — do not port-forward it to untrusted networks. Full HTTP API reference: [docs/http-api.md](./docs/http-api.md).
 
 ## Development
 
 ```sh
-npm run dev        # tsx watch server/index.ts (API on :5899)
-npm run dev:ui     # Vite dev server for web/ — proxies /api + /v1 to :5899
-npm start          # run the server once (tsx server/index.ts) — what `glassray start` wraps
-npm run typecheck  # tsc --noEmit
-npm test           # vitest (hermetic: temp GLASSRAY_HOME, ephemeral port)
+npm run dev         # tsx watch server/index.ts (API on :5899)
+npm run dev:ui      # Vite dev server for web/ — proxies /api + /v1 to :5899
+npm start           # run the server once (tsx server/index.ts) — what `glassray start` wraps
+npm run typecheck   # tsc --noEmit
+npm test            # vitest (hermetic: temp GLASSRAY_HOME, ephemeral port)
 npm run test:egress # airgap proof: boot on mock, ingest + discover + flows, assert zero non-loopback sockets
-npm run build:ui   # vite build web -> web/dist (served statically by the server)
+npm run build:ui    # vite build web -> web/dist (served statically by the server)
 ```
 
 Layout:
+- `server/app.ts` — the Fastify app + run queue, booted by `index.ts` + `bootstrap.ts`; `ingest.ts` / `tail.ts` / `security.ts` — OTLP ingest/upsert, the SSE hub, loopback + bearer guards.
+- `server/llm.ts` — the multi-provider LLM core + free-text span replay (`generateText`).
+- `server/classify.ts` / `flows.ts` — flow selector schema + inline/background classification; flow CRUD, audit, and the discover bootstrap.
+- `server/discovery.ts` / `evals.ts` / `improver.ts` — spec-free deviation discovery, the flow-scoped autorun evals, the fix generator; `settings.ts` / `schema.ts` — persisted dashboard settings, the Drizzle schema.
+- `server/vendor/` — trace analysis vendored from the main app (`buildTraceView(envelope, traceId)`: OTLP normalizer + span-tree + attribute ladders); each file names its source path — **refresh by re-copying**, never depend on it.
+- `web/` — the Vite React SPA (nav: Overview / Traces / Deviations / Evals / Flows, plus Settings), dependency-free CSS charts (`components/charts.tsx`), tail-driven refresh (`useTailRefresh.ts`).
+- `skills/glassray/SKILL.md` — the agent skill `glassray init` installs (shipped in the npm package); `bin/glassray.mjs` — the zero-dependency CLI; `test/egress-proof.mjs` — the airgap proof (socket-layer preload).
 
-- `server/` — Fastify app (`app.ts`), boot (`index.ts`, `bootstrap.ts`), Drizzle
-  schema (`schema.ts`), ingest/upsert (`ingest.ts`), SSE hub (`tail.ts`), loopback +
-  bearer guards (`security.ts`), the multi-provider LLM core (`llm.ts`), the
-  spec-free discovery + flow passes (`discovery.ts`, `flows.ts`), the repeatable
-  rule-scoring evals (`evals.ts`), the fix generator (`improver.ts`), free-text span
-  replay (`llm.ts` `generateText`), the persisted dashboard settings (`settings.ts`),
-  and the stdio MCP proxy (`mcp.ts`).
-- `server/vendor/` — trace analysis vendored from the main app
-  (`buildTraceView(envelope, traceId)`: OTLP normalizer + span-tree + attribute
-  ladders). Each file names its source path; **refresh by re-copying from the main
-  app** rather than depending on it.
-- `web/` — the Vite React SPA (nav: Overview / Traces / Deviations / Evals; Flows is a
-  card on the Overview, at `#/flows`), with dependency-free CSS charts
-  (`components/charts.tsx`) and live tail-driven refresh (`useTailRefresh.ts`).
-- `bin/glassray.mjs` — the zero-dependency CLI.
-- `test/egress-proof.mjs` — the airgap proof (socket-layer preload).
-
-**Prompts & platform lineage.** The discovery judge + grouping prompts are lifted
-spec-free from the main platform worker's `apps/worker/src/routes/deviations.ts` (dropping
-the Intent-Spec checklist/flow machinery). The fix-generation prompt (`improver.ts`) is a
-spec-free port of the platform's Improver (`apps/worker/src/improver`) — the same
-paste-into-Claude-Code markdown contract, adapted to work from traces alone. The
-single-rule eval judge and the flow-grouping prompt are Coach-original.
+**Prompt lineage.** The discovery judge + grouping prompts are lifted spec-free from the platform worker's
+`apps/worker/src/routes/deviations.ts` (minus the Intent-Spec machinery); the fix prompt (`improver.ts`) is a spec-free
+port of the platform's Improver (`apps/worker/src/improver`) — the same paste-into-Claude-Code markdown contract, adapted to work from traces alone. The single-rule eval judge, the flow-clustering (discover) prompt, and the flow-classification prompt are Coach-original.
 
 ## Publishing
 
-Coach is published to npm as **[`@glassray/coach`](https://www.npmjs.com/package/@glassray/coach)**
-(scoped, public) with a `glassray` bin — so users run `npx @glassray/coach` (or
-`npm i -g @glassray/coach`, then `glassray start`). To cut a new release:
+Published to npm as **[`@glassray/coach`](https://www.npmjs.com/package/@glassray/coach)** (scoped, made
+public via `publishConfig.access: public`) with a `glassray` bin. To cut a release:
 
 ```sh
 cd coach
-npm login              # as a member of the @glassray org
-npm version patch      # bump the version
-npm publish            # runs `prepack` (builds web/dist), packs, publishes public
+npm login          # as a member of the @glassray org
+npm version patch
+npm publish        # runs `prepack` (builds web/dist), packs, publishes public
 ```
 
-- `prepack` builds the SPA into `web/dist`; the `files` whitelist then ships `bin/`, the
-  runtime `server/*.ts` (tests excluded via `!server/**/*.test.ts`), `web/dist/`,
-  `examples/`, `README.md`, and `LICENSE` — verify with `npm pack --dry-run`.
-- `publishConfig.access: public` makes the scoped package public (scoped packages are
-  private by default).
-- The server runs the TypeScript directly via `tsx` (a runtime **dependency**, not dev),
-  so there is no separate compile step. Smoke-test a release in a clean directory:
-  `npx @glassray/coach@latest`.
+`prepack` builds the SPA into `web/dist`; the `files` whitelist then ships `bin/`, the runtime `server/*.ts`
+(tests excluded via `!server/**/*.test.ts`), `skills/`, `web/dist/`, `examples/`, `README.md`, and `LICENSE` — verify with `npm pack --dry-run`.
+The server runs the TypeScript directly via `tsx` (a runtime **dependency**, not dev), so there is no compile step. Smoke-test a release in a clean directory: `npx @glassray/coach@latest start`.

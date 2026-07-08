@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { EvalDetail as EvalDetailData, RunStatus } from "../api";
-import { deleteEval, fetchEval, isNotFoundError, runEval } from "../api";
+import type { EvalDetail as EvalDetailData, FlowSummary, RunStatus } from "../api";
+import { deleteEval, fetchEval, fetchFlows, fetchRun, isNotFoundError, runEval, updateEval } from "../api";
 import { plural, readStat, relativeTime, truncate } from "../format";
 import { useRun } from "../useRun";
 import { PassRateTrend } from "./charts";
+import { FlowChip } from "./Evals";
 import { RunBar } from "./RunBar";
 
 /** A pass/fail verdict pill for one scored trace. */
@@ -26,16 +27,28 @@ export const EvalDetail = ({ id }: { id: string }) => {
   const [sampleSize, setSampleSize] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [flows, setFlows] = useState<FlowSummary[]>([]);
+  /** The judge model recorded in the latest run's stats, when present. */
+  const [judgeModel, setJudgeModel] = useState<string | null>(null);
+  const [threshold, setThreshold] = useState("");
+  const [patchBusy, setPatchBusy] = useState(false);
+  const [patchError, setPatchError] = useState<string | null>(null);
   /** The id the currently-displayed data belongs to, so a late response for a prior id is ignored. */
   const shownId = useRef(id);
 
-  /** Reload this eval's detail from the server, ignoring a response that arrives after the id changed. */
+  /** Reload this eval's detail (+ the latest run's judge model), ignoring a response for a prior id. */
   const load = useCallback(async () => {
     try {
       const res = await fetchEval(id);
       if (shownId.current !== id) return;
       setData(res);
+      setThreshold(String(res.autorunThreshold));
       setStatus("ready");
+      // The judge model lives in the scoring run's stats, not on the eval row.
+      const run = res.latestRunId ? await fetchRun(res.latestRunId).catch(() => null) : null;
+      if (shownId.current !== id) return;
+      const jm = run?.stats?.judgeModel;
+      setJudgeModel(typeof jm === "string" ? jm : null);
     } catch (err) {
       if (shownId.current !== id) return;
       setMissing(isNotFoundError(err));
@@ -48,6 +61,50 @@ export const EvalDetail = ({ id }: { id: string }) => {
     setStatus("loading");
     void load();
   }, [id, load]);
+
+  // The flows list feeds the scope picker + the header chip's name (best-effort).
+  useEffect(() => {
+    void fetchFlows("all")
+      .then((res) => setFlows(res.items))
+      .catch(() => setFlows([]));
+  }, []);
+
+  /** Serializes PATCHes so an interaction during an in-flight save queues behind it instead of being dropped. */
+  const patchChain = useRef<Promise<void>>(Promise.resolve());
+
+  /** PATCH one scope/autorun change (queued behind any in-flight save) and adopt the refreshed detail. */
+  const applyPatch = useCallback(
+    (patch: { flowId?: string | null; autorun?: boolean; autorunThreshold?: number }): Promise<void> => {
+      const run = async () => {
+        setPatchBusy(true);
+        setPatchError(null);
+        try {
+          const res = await updateEval(id, patch);
+          if (shownId.current !== id) return;
+          setData(res);
+          setThreshold(String(res.autorunThreshold));
+        } catch (err) {
+          setPatchError(err instanceof Error ? err.message : "Could not update the eval.");
+        } finally {
+          setPatchBusy(false);
+        }
+      };
+      patchChain.current = patchChain.current.then(run, run);
+      return patchChain.current;
+    },
+    [id],
+  );
+
+  /** Commit the threshold field on blur when it parses to a new positive integer; else snap back. */
+  const commitThreshold = useCallback(() => {
+    if (!data) return;
+    const parsed = Number.parseInt(threshold, 10);
+    if (Number.isInteger(parsed) && parsed > 0 && parsed <= 1000 && parsed !== data.autorunThreshold) {
+      void applyPatch({ autorunThreshold: parsed });
+    } else {
+      setThreshold(String(data.autorunThreshold));
+    }
+  }, [data, threshold, applyPatch]);
 
   /** Start an eval run, forwarding the sample size only when it parses to a positive integer. */
   const trigger = useCallback(() => {
@@ -112,12 +169,72 @@ export const EvalDetail = ({ id }: { id: string }) => {
           ) : (
             <span className={`eval-source eval-source-${data.source}`}>{data.source}</span>
           )}
+          {data.flowId ? (
+            <FlowChip flowId={data.flowId} flowName={flows.find((f) => f.id === data.flowId)?.name} />
+          ) : null}
           <span className="muted">{relativeTime(data.createdAt)}</span>
         </div>
         {data.description ? <p className="detail-sub">{data.description}</p> : null}
         <div className="callout">
           <div className="callout-label">Rule</div>
           <div className="callout-body">{data.rule}</div>
+        </div>
+
+        <div className="panel card-pad eval-scope">
+          <div className="eval-scope-row">
+            <div className="new-eval-field">
+              <label className="new-eval-label" htmlFor="ed-flow">
+                Flow scope
+              </label>
+              <select
+                id="ed-flow"
+                className="new-eval-input"
+                value={data.flowId ?? ""}
+                disabled={patchBusy}
+                onChange={(e) => void applyPatch({ flowId: e.target.value || null })}
+              >
+                <option value="">Global — sample all traces</option>
+                {flows
+                  .filter((f) => f.status === "active" || f.id === data.flowId)
+                  .map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                      {f.status === "archived" ? " (archived)" : ""}
+                    </option>
+                  ))}
+              </select>
+            </div>
+            <label className="eval-autorun-toggle" htmlFor="ed-autorun" title="Rerun automatically when the flow accrues new member traces">
+              <input
+                id="ed-autorun"
+                type="checkbox"
+                checked={data.autorun}
+                disabled={patchBusy || !data.flowId}
+                onChange={(e) => void applyPatch({ autorun: e.target.checked })}
+              />
+              Autorun
+            </label>
+            <div className="new-eval-field">
+              <label className="new-eval-label" htmlFor="ed-threshold">
+                New members to trigger
+              </label>
+              <input
+                id="ed-threshold"
+                className="new-eval-input eval-threshold"
+                type="number"
+                min={1}
+                max={1000}
+                value={threshold}
+                disabled={patchBusy || !data.flowId}
+                onChange={(e) => setThreshold(e.target.value)}
+                onBlur={commitThreshold}
+              />
+            </div>
+          </div>
+          {!data.flowId ? (
+            <p className="muted">Autorun needs a flow scope — bind this eval to a flow to rerun it hands-free.</p>
+          ) : null}
+          {patchError ? <p className="runbar-error">{patchError}</p> : null}
         </div>
         <div className="eval-actions">
           <RunBar
@@ -171,6 +288,11 @@ export const EvalDetail = ({ id }: { id: string }) => {
             </div>
             {data.lastRunAt ? (
               <span className="eval-summary-when muted">last run {relativeTime(data.lastRunAt)}</span>
+            ) : null}
+            {judgeModel ? (
+              <span className="eval-summary-when muted" title="The model that judged the latest run">
+                judge <span className="mono">{judgeModel}</span>
+              </span>
             ) : null}
           </div>
 

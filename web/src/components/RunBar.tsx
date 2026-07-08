@@ -5,12 +5,10 @@ import { fetchLlm } from "../api";
 import { readStat } from "../format";
 import type { RunState } from "../useRun";
 
-/** Sentence-case a raw lowercase server error (e.g. the 409 string) for display. */
+/** Sentence-case a raw lowercase server error for display. */
 const humanizeError = (msg: string): string => {
   const trimmed = msg.trim();
-  const cased = trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
-  if (/already in progress/i.test(cased)) return `${cased} — results will appear when it finishes.`;
-  return cased;
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 };
 
 /**
@@ -47,10 +45,15 @@ export const RunBar = ({
       : null;
 
   // Mid-run progress ("8/20"), published by the scan loop — reassures the
-  // developer a long run is working rather than stuck.
+  // developer a long run is working rather than stuck. While the run is still
+  // waiting in the server's queue, say so instead of pretending it's working.
   const total = run.progress ? readStat(run.progress, "total") : 0;
   const scanned = run.progress ? readStat(run.progress, "scanned") : 0;
-  const runningText = total > 0 ? `${runningLabel} ${scanned}/${total}` : runningLabel;
+  const runningText = run.queued
+    ? "Queued…"
+    : total > 0
+      ? `${runningLabel} ${scanned}/${total}`
+      : runningLabel;
 
   return (
     <div className="runbar">

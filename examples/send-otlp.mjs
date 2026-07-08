@@ -5,7 +5,7 @@
  * would (OTLP/JSON, gzip-compressed, bearer-authed). Doubles as a "give me some
  * sample data" tool.
  *
- *   node bin/glassray.mjs         # start Coach in another terminal
+ *   node bin/glassray.mjs start   # start Coach in another terminal
  *   node examples/send-otlp.mjs   # then run this — it auto-discovers the local key
  *
  * Config (all optional — it discovers the rest from the local server):
@@ -24,7 +24,7 @@ const resolveKey = async () => {
   if (process.env.GLASSRAY_API_KEY) return process.env.GLASSRAY_API_KEY;
   const res = await fetch(`${base}/api/info`).catch(() => null);
   if (!res || !res.ok) {
-    throw new Error(`Coach not reachable at ${base} — start it with \`node bin/glassray.mjs\` (or set GLASSRAY_ENDPOINT).`);
+    throw new Error(`Coach not reachable at ${base} — start it with \`node bin/glassray.mjs start\` (or set GLASSRAY_ENDPOINT).`);
   }
   return (await res.json()).apiKey;
 };

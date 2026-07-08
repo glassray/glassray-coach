@@ -356,7 +356,7 @@ const resolveKey = async (base) => {
   if (process.env.GLASSRAY_API_KEY) return process.env.GLASSRAY_API_KEY;
   const res = await fetch(`${base}/api/info`).catch(() => null);
   if (!res || !res.ok) {
-    throw new Error(`Coach not reachable at ${base} — start it with \`npx @glassray/coach\` (or set GLASSRAY_ENDPOINT).`);
+    throw new Error(`Coach not reachable at ${base} — start it with \`npx @glassray/coach start\` (or set GLASSRAY_ENDPOINT).`);
   }
   return (await res.json()).apiKey;
 };
@@ -401,9 +401,17 @@ Next: Deviations → Run discovery. It should cluster three recurring failure mo
   • order-status answers invented with no lookup_order call
   • refunds over the $100 policy limit issued without escalation
   • full card numbers echoed back to the customer
-Save each as an eval, then re-run me with --fixed and re-run the evals.`);
+Scope the behaviours as flows (README §3), save each deviation as a flow-scoped eval
+with an autorun threshold of 3, baseline the evals — then re-run me with --fixed and
+touch nothing: the fresh traffic classifies into your flows and the evals rerun on
+their own.`);
   } else {
-    console.log('\nNext: Evals → re-run each saved eval — the pass rates climb. A change that\nreintroduced an old failure would be flagged as a regression instead.');
+    console.log(`
+Next: nothing — Coach is classifying these traces into your flows in the background
+(watch \`glassray runs list\`), and flow-scoped evals past their autorun threshold
+rerun on their own. Check \`glassray evals list\` (or the Evals page): the pass rates
+climb. A change that reintroduced an old failure would be flagged as a regression
+instead.`);
   }
 };
 

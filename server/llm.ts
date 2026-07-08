@@ -47,6 +47,8 @@ export type GenerateStructuredArgs<T> = {
   prompt: string;
   /** Which model tier to run (defaults to `heavy`). */
   tier?: LlmTier;
+  /** Explicit model id override within the active provider; falls back to the tier default when absent. */
+  model?: string;
   /** Sampling temperature (defaults to 0 for determinism). */
   temperature?: number;
   /** Abort signal — when a run is canceled/timed out, stops the in-flight provider call. */
@@ -411,11 +413,12 @@ export const generateStructured = async <T>({
   system,
   prompt,
   tier = 'heavy',
+  model: modelOverride,
   temperature = 0,
   signal,
 }: GenerateStructuredArgs<T>): Promise<GeneratedObject<T>> => {
   const provider = resolveProvider();
-  const model = resolveModelId(provider, tier);
+  const model = modelOverride && modelOverride.length > 0 ? modelOverride : resolveModelId(provider, tier);
   switch (provider) {
     case 'mock':
       // The mock backend is synchronous/offline, but still honor an already-fired
