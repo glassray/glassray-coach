@@ -1,8 +1,8 @@
 # The support-bot demo: find the failures your dashboards can't see
 
-A complete, runnable walkthrough of the Coach loop — **discover → codify as evals →
-fix → prove no regression** — built around a simulated customer-support agent for a
-fictional store. Everything the agent "says" is canned (no API key needed,
+A complete, runnable walkthrough of the Coach loop — **discover → scope as flows →
+codify as flow-scoped evals → fix → watch the reruns happen on their own** — built
+around a simulated customer-support agent for a fictional store. Everything the agent "says" is canned (no API key needed,
 deterministic), but the instrumentation is the real
 [`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js) SDK — the
 `import` in [`support-bot.mjs`](./support-bot.mjs) is exactly what a production
@@ -30,7 +30,7 @@ From a clone of this repo:
 
 ```sh
 npm install && npm run build:ui
-node bin/glassray.mjs          # dashboard + ingest on http://127.0.0.1:5899
+node bin/glassray.mjs start    # dashboard + ingest on http://127.0.0.1:5899
 ```
 
 Leave it running and open <http://127.0.0.1:5899>. Starting from a clean slate
@@ -69,43 +69,107 @@ these threw an error — they're *semantic* failures, invisible to error-rate da
 > roughly a minute. On the deterministic `mock` provider it returns a single
 > placeholder deviation (mechanics only, no real analysis).
 
-## 3. Freeze each deviation into an eval
+## 3. Scope each behaviour as a durable flow
 
-On each deviation, click **Save as eval**. That turns its rule into a repeatable
-pass/fail check. Run one now to get a baseline — an eval run scores the newest
-traces (20 by default), so you'll see it fail on the buggy corpus. You can also
-hand-write an eval under **Evals** (e.g. "The reply must never contain a full card
-number.").
+Every ticket lands as the same `handle-support-ticket` trace under the same agent —
+what distinguishes a card update from a refund request is the customer's message.
+That's exactly what flows are for: a **flow** is a named behaviour with a membership
+definition, and it persists across sessions. Create one of each kind (dashboard
+**Flows → New flow**, or the CLI):
 
-## 4. Ship the fix, prove it
+```sh
+# A deterministic selector flow — "card" appears in the card-update messages:
+node bin/glassray.mjs flows create --name "Card updates" \
+  --description "The customer wants to change the card on file" \
+  --selector '{"agent":"support-bot","q":"card","limit":20}'
+
+# A rule-defined flow — refund requests share no substring ("$310 back", "refund
+# $45", "charged for gift wrap…"), so let the classify sweep read the intent:
+node bin/glassray.mjs flows create --name "Refund requests" \
+  --classify llm \
+  --rule "The customer is asking for money back on an order (a refund), in any wording"
+```
+
+The selector flow materializes its members instantly; the rule flow is picked up by
+the **background classify sweep** over the newest traces. `glassray flows list` shows
+both with live member counts; `glassray flows get <id>` shows every member with how
+it was assigned. (You can also let Coach propose flows from the traffic itself —
+**Discover flows** / `glassray flows discover` — then tighten what it finds.)
+
+> Classification is deliberately iterative, and this selector proves it:
+> `glassray flows audit <flowId>` shows 4 members — but one is "How do I redeem a
+> **gift card**?" (an over-match), while t29 ("Charge my **amex** 3400…") never says
+> "card" and slipped through (an under-match). That's the audit's job — spot both,
+> then tighten: `glassray flows update <id> --no-selector --classify llm --rule "The
+> customer is changing the payment card on file, including by brand name"` (drop the
+> substring selector too, or its matches remain active alongside the rule) and the sweep
+> re-derives membership from intent instead of substrings. Like discovery, the
+> rule-based sweep needs a real model — on `mock` it assigns nothing (selector
+> flows still work everywhere).
+
+## 4. Freeze each deviation into a flow-scoped eval
+
+On each deviation, click **Save as eval** and pick its flow — or from the CLI, bind
+and tune the autorun threshold in one go (the corpus only lands ~4 tickets per
+behaviour per run, under the default threshold of 10):
+
+```sh
+node bin/glassray.mjs evals create --deviation <devId> --flow <flowId>
+node bin/glassray.mjs evals update <evalId> --autorun-threshold 3
+
+# or hand-write one:
+node bin/glassray.mjs evals create --flow <cardFlowId> --autorun-threshold 3 \
+  --label "No full card numbers" \
+  --rule "The reply must never contain a full card number — refer to cards by their last 4 digits only."
+```
+
+A flow-scoped eval samples **only that flow's traces** — the card eval never wastes
+a judge call on a shipping question. Baseline each one now
+(`glassray evals run <id>`): it fails on the buggy corpus, as it should.
+
+## 5. Ship the fix — and watch the loop close itself
 
 ```sh
 node examples/support-bot/support-bot.mjs --fixed    # same 34 tickets, bugs corrected
 ```
 
 The fixed agent grounds every order answer in `lookup_order`, escalates over-limit
-refunds to a human, and refers to cards by their last 4 digits. Now **Evals → each →
-Re-run eval**: the pass rate climbs, and the run history shows the trend. If a later
-change *reintroduced* a failure that used to pass, the eval would flag it as a
-**regression**. That ratchet is the whole loop: discover → codify → prevent.
+refunds to a human, and refers to cards by their last 4 digits. This time, **don't
+touch anything**: as the fresh traffic lands, Coach classifies it into your flows in
+the background, and any flow-scoped eval past its autorun threshold **reruns on its
+own**. Watch it happen:
 
-## 5. Debug a single call (optional)
+```sh
+node bin/glassray.mjs runs list      # classify sweep → autorun eval runs
+node bin/glassray.mjs evals list     # pass rates climbed without you touching them
+```
+
+The run history shows the trend, and if a later change *reintroduced* a failure that
+used to pass, the eval flags it as a **regression**. That ratchet is the whole loop:
+discover → scope → codify → and from then on it runs itself. (The same applies when
+you switch the agent's model — new traffic classifies into the same flows, the evals
+rerun, and the history tells you whether the cheaper model held up.)
+
+## 6. Debug a single call (optional)
 
 Open any trace, select an LLM span, and hit **Replay** — edit the model / system /
 prompt and re-issue it through your local LLM, with the fresh output beside the
 original. The viewer becomes a debugger.
 
-## 6. Drive it from your coding agent (optional)
+## 7. Drive the whole loop from your coding agent (optional)
 
-With Coach running, register it as an MCP server:
+With Coach running, install the agent skill into this repo (Claude Code, Codex, Copilot):
 
 ```sh
-claude mcp add glassray -- npx @glassray/coach mcp
+glassray init          # installs the skill for Claude Code, Codex & Copilot
 ```
 
-Then ask Claude Code things like *"which support-bot traces echoed a full card
-number back to the customer?"* or *"run discovery and summarize what it found"* —
-the same traces, deviations, and evals, from your editor.
+Then everything above becomes something you can simply ask for: *"set up flows and
+evals for the support bot from its policy"* (Claude reads `SYSTEM_PROMPT` in
+`support-bot.mjs` — the three policy lines are the three evals), *"which traces
+echoed a full card number?"*, or *"run discovery and fix what it finds"* — Claude
+drives the same flows, deviations, and evals through the `glassray` CLI, and
+`glassray fix <deviationId>` hands it repo-ready instructions to apply.
 
 ---
 
@@ -124,11 +188,17 @@ option, run discovery *before* the audience arrives and demo the finished result
 3. **Overview** — "34 conversations today, 97% success. Ship it?"
 4. **Traces** — open one clean waterfall (inputs/outputs/tokens on every span), then
    sort by tokens and show the 18k outlier. "Full visibility — but everything's green."
-5. **Back to Deviations** — open each one: the rule, the evidence, the offending
+5. **Flows → New flow** — create "Card updates" with the `q: card` selector; members
+   materialize instantly. "A flow is a durable scope: this behaviour, these traces,
+   from now on — new traffic classifies into it in the background."
+6. **Back to Deviations** — open each one: the rule, the evidence, the offending
    traces. "Eleven wrong answers. Zero errors. Your error rate never saw them."
-6. **Save as eval** on each, run one for a baseline. "The finding is now a test."
-7. Run `--fixed`, re-run the evals — pass rates climb. "Discovery finds it, evals
-   lock it in. That's the loop."
+7. **Save as eval** on each, bound to its flow (threshold 3), run one for a baseline.
+   "The finding is now a test — scoped to exactly the behaviour it's about."
+8. Run `--fixed` and **touch nothing** — narrate `glassray runs list` as the classify
+   sweep and the autorun eval runs appear, then show the climbing pass rates.
+   "Discovery finds it, flows scope it, evals lock it in, and the reruns are
+   hands-free. That's the loop."
 
 ## Files
 

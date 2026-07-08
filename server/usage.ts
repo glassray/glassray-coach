@@ -23,7 +23,7 @@ import { llmUsage } from './schema.js';
  */
 
 /** What an LLM call was for — the usage `kind` column. */
-export type UsageKind = 'discovery' | 'eval' | 'flows' | 'replay' | 'improver';
+export type UsageKind = 'discovery' | 'eval' | 'flows' | 'replay' | 'improver' | 'classify';
 
 /** Default spend cap in USD when GLASSRAY_LLM_BUDGET_USD is unset. */
 const DEFAULT_BUDGET_USD = 50;

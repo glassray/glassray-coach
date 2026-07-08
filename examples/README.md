@@ -4,7 +4,7 @@ Ways to get traces into a locally-running Coach. The example scripts run from a
 clone of this repo; Coach itself needs no clone — start it first:
 
 ```sh
-npx @glassray/coach         # serves the dashboard + ingest on http://127.0.0.1:5899
+npx @glassray/coach start   # serves the dashboard + ingest on http://127.0.0.1:5899
 ```
 
 ## 1. `send-otlp.mjs` — one sample trace, zero dependencies
@@ -36,12 +36,13 @@ echoed back to customers. None of them error, so the dashboards stay green — u
 
 ```sh
 node examples/support-bot/support-bot.mjs            # the buggy corpus
-# … save the discovered deviations as evals, then prove the fix:
-node examples/support-bot/support-bot.mjs --fixed    # same tickets, bugs corrected
+# … scope the behaviours as flows, save the deviations as flow-scoped evals, then:
+node examples/support-bot/support-bot.mjs --fixed    # same tickets, bugs corrected —
+#     the traffic classifies into your flows and the evals rerun on their own
 ```
 
-The step-by-step loop — discover → codify as evals → fix → prove no regression —
-plus a 5-minute demo script is in
+The step-by-step loop — discover → scope as durable flows → codify as flow-scoped
+evals → fix → watch the autorun reruns prove it — plus a 5-minute demo script is in
 [`examples/support-bot/README.md`](support-bot/README.md). Since it uses the real
 SDK, `support-bot.mjs` doubles as the reference for instrumenting your own agent
 (`glassray.trace` / `t.llm` / `t.tool`); a Coach test drives a real round trip

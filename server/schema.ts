@@ -1,4 +1,4 @@
-import { doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
+import { boolean, doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
 
 /** One row per trace, keyed by the 32-hex OTLP traceId; `raw` holds the full envelope, the rest are denormalized display fields. */
 export const traces = pgTable('traces', {
@@ -20,6 +20,8 @@ export const traces = pgTable('traces', {
   tokensOut: integer('tokens_out'),
   inputPreview: text('input_preview'),
   outputPreview: text('output_preview'),
+  /** Classification watermark: null = awaiting the background classify sweep; stamped once swept (matched or not). */
+  classifiedAt: timestamp('classified_at', { withTimezone: true, mode: 'date' }),
 });
 
 /** One background job (`discovery` | `flows`); tracks lifecycle + a free-form `stats` blob. */
@@ -77,25 +79,46 @@ export const deviationExamples = pgTable('deviation_examples', {
   evidence: text('evidence').notNull(),
 });
 
-/** A named recurring agent workflow (by intent), clustered by the flow-labeling pass. */
+/**
+ * A durable, named agent behaviour with a membership definition: either a
+ * deterministic `selector` query, a plain-language `rule` classified by the
+ * background LLM sweep, or both. Flows persist across sessions — they are the
+ * scope evals run against.
+ */
 export const flows = pgTable('flows', {
   /** Prefixed random-hex id (`flow_…`). */
   id: text('id').primaryKey(),
-  /** The flows run that produced this flow. */
-  runId: text('run_id').notNull(),
+  /** The discover/clustering run that produced this flow; null for CRUD-created flows. */
+  runId: text('run_id'),
   name: text('name').notNull(),
   description: text('description').notNull(),
-  /** Number of member traces assigned to this flow. */
-  traceCount: integer('trace_count').notNull(),
+  /** Legacy denormalized member count — list endpoints compute live counts; kept for old rows. */
+  traceCount: integer('trace_count').notNull().default(0),
+  /** Deterministic membership query (`FlowSelector` jsonb); null = LLM-rule or static membership only. */
+  selector: jsonb('selector'),
+  /** Plain-language membership rule the LLM classify sweep matches traces against. */
+  rule: text('rule'),
+  /** How membership is decided: `selector` (deterministic only) or `llm` (rule-classified by the sweep). */
+  classify: text('classify').notNull().default('selector'),
+  /** Lifecycle: `active` (classified + listed) or `archived`. */
+  status: text('status').notNull().default('active'),
+  /** Provenance: `user` (dashboard), `claude` (CLI agent), or `discovery` (clustering bootstrap). */
+  createdBy: text('created_by').notNull().default('user'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });
 
-/** Membership join: which traces belong to which flow (composite-keyed, no duplicates). */
+/** Membership join: which traces belong to which flow (composite-keyed, no duplicates), with assignment provenance. */
 export const flowTraces = pgTable(
   'flow_traces',
   {
     flowId: text('flow_id').notNull(),
     traceId: text('trace_id').notNull(),
+    /** How this membership was decided: `selector` | `llm` | `manual`. */
+    assignedBy: text('assigned_by').notNull().default('selector'),
+    /** LLM assignment confidence (`high` | `low`); null for selector/manual assignments. */
+    confidence: text('confidence'),
+    assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.flowId, t.traceId] })],
 );
@@ -112,6 +135,14 @@ export const evals = pgTable('evals', {
   source: text('source').notNull(),
   /** The deviation this eval was saved from, when `source = 'deviation'`. */
   sourceDeviationId: text('source_deviation_id'),
+  /** The flow this eval is scoped to (runs sample that flow's members); null = global (newest traces store-wide). */
+  flowId: text('flow_id'),
+  /** Whether the server auto-reruns this eval when its flow accrues new member traces. */
+  autorun: boolean('autorun').notNull().default(true),
+  /** How many new member traces (since the last run) trigger an automatic rerun. */
+  autorunThreshold: integer('autorun_threshold').notNull().default(10),
+  /** When this eval's most recent run STARTED (stamped at run start — the autorun watermark). */
+  lastRunAt: timestamp('last_run_at', { withTimezone: true, mode: 'date' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });
 

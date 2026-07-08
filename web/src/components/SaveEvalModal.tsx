@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import type { SpanNode, TraceView } from "../api";
-import { createEval } from "../api";
+import type { FlowSummary, SpanNode, TraceView } from "../api";
+import { createEval, fetchFlows } from "../api";
 import { prettyValue, truncate } from "../format";
 
 /**
@@ -21,6 +21,8 @@ export const SaveEvalModal = ({
 }) => {
   const [label, setLabel] = useState("");
   const [rule, setRule] = useState("");
+  const [flowId, setFlowId] = useState("");
+  const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -33,6 +35,13 @@ export const SaveEvalModal = ({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Active flows feed the optional scope picker (best-effort — the select hides on failure).
+  useEffect(() => {
+    void fetchFlows("active")
+      .then((res) => setFlows(res.items))
+      .catch(() => setFlows([]));
+  }, []);
+
   /** Reference evidence: prefer the selected span's I/O, else the whole trace's. */
   const evidenceInput = selected ? prettyValue(selected.input) : trace.inputPreview;
   const evidenceOutput = selected ? prettyValue(selected.output) : trace.outputPreview;
@@ -43,14 +52,18 @@ export const SaveEvalModal = ({
     setBusy(true);
     setError(null);
     try {
-      const { id } = await createEval({ label: label.trim(), rule: rule.trim() });
+      const { id } = await createEval({
+        label: label.trim(),
+        rule: rule.trim(),
+        flowId: flowId || undefined,
+      });
       window.location.hash = `#/eval/${encodeURIComponent(id)}`;
       onClose();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not create eval.");
       setBusy(false);
     }
-  }, [label, rule, busy, onClose]);
+  }, [label, rule, flowId, busy, onClose]);
 
   return (
     <div className="modal-scrim" role="presentation">
@@ -91,6 +104,26 @@ export const SaveEvalModal = ({
               onChange={(e) => setRule(e.target.value)}
             />
           </div>
+          {flows.length > 0 ? (
+            <div className="new-eval-field">
+              <label className="new-eval-label" htmlFor="se-flow">
+                Flow <span className="muted">(optional — runs sample this flow's members)</span>
+              </label>
+              <select
+                id="se-flow"
+                className="new-eval-input"
+                value={flowId}
+                onChange={(e) => setFlowId(e.target.value)}
+              >
+                <option value="">Global — sample all traces</option>
+                {flows.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
 
           <div className="save-eval-evidence">
             <div className="new-eval-label">From this trace (for reference)</div>

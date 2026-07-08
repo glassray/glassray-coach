@@ -43,6 +43,8 @@ export interface TraceFilters {
   q?: string;
   agent?: string;
   status?: "error" | "ok";
+  /** Only traces that are members of this flow. */
+  flow?: string;
 }
 
 /** One bucket of the activity timeline (GET /api/timeline). */
@@ -135,16 +137,18 @@ export interface LlmInfo {
   reason: string;
 }
 
-/** Handle returned by the run-triggering POST endpoints. */
+/** Handle returned by the 202 run-triggering POST endpoints — the run's id + its queue state. */
 export interface RunHandle {
   runId: string;
+  /** `queued` while waiting in the server's FIFO, `running` once it holds the slot. */
+  status: "queued" | "running";
 }
 
-/** GET /api/runs/:id — status of one background discovery/flows/eval run. */
+/** GET /api/runs/:id — status of one background discovery/flows/eval/classify run. */
 export interface RunStatus {
   id: string;
-  kind: "discovery" | "flows" | "eval" | "improver";
-  status: "running" | "done" | "error";
+  kind: "discovery" | "flows" | "eval" | "improver" | "classify";
+  status: "queued" | "running" | "done" | "error";
   error: string | null;
   stats: Record<string, unknown> | null;
   startedAt: string | null;
@@ -198,31 +202,118 @@ export interface DeviationDetail {
   examples: DeviationExample[];
 }
 
-/** One discovered flow — a recurring behaviour that groups captured traces. */
-export interface FlowItem {
+/** How a flow assigns members: a deterministic selector query or a plain-language LLM rule. */
+export type FlowClassify = "selector" | "llm";
+
+/** A flow's lifecycle state — archived flows drop out of classification and the default list. */
+export type FlowStatus = "active" | "archived";
+
+/** A flow's deterministic membership query — optional fields, AND-combined; `traceIds` are pins. */
+export interface FlowSelector {
+  /** Exact match on the trace's agent. */
+  agent?: string;
+  /** Case-insensitive substring match on the trace's root name. */
+  nameContains?: string;
+  /** Case-insensitive substring match on the trace's input preview (user intent). */
+  q?: string;
+  /** Only ok or only error traces. */
+  status?: "ok" | "error";
+  /** Explicit trace-id pins — always members, regardless of the constraints. */
+  traceIds?: string[];
+  /** How many of the flow's newest members an eval run samples (default 20). */
+  limit?: number;
+}
+
+/** One durable flow — a named agent behaviour with its membership definition + live member count. */
+export interface FlowSummary {
   id: string;
   name: string;
   description: string;
+  selector: FlowSelector | null;
+  rule: string | null;
+  classify: FlowClassify;
+  status: FlowStatus;
+  /** Who created the flow: `user`, `claude`, or the `discovery` bootstrap. */
+  createdBy: string;
   traceCount: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
-/** GET /api/flows — the discovered flows plus the run that produced them (null before any run). */
+/** GET /api/flows — the durable flows plus how many traces still await the classify sweep. */
 export interface FlowListResponse {
-  items: FlowItem[];
-  runId: string | null;
+  items: FlowSummary[];
+  unclassified: number;
 }
 
-/** A member trace of a flow, as returned by GET /api/flows/:id. */
-export interface FlowTraceRef {
+/** A member trace of a flow with its assignment provenance, as returned by GET /api/flows/:id. */
+export interface FlowMember {
   traceId: string;
   name: string | null;
   agent: string | null;
+  status: TraceStatus;
+  receivedAt: string | null;
+  /** How this trace got in: the deterministic selector, the LLM sweep, or a manual pin. */
+  assignedBy: "selector" | "llm" | "manual";
+  /** LLM assignments carry a confidence; selector/manual ones are null. */
+  confidence: "high" | "low" | null;
+  assignedAt: string;
 }
 
-/** GET /api/flows/:id — one flow with its member traces. */
-export interface FlowDetail {
-  flow: FlowItem;
-  traces: FlowTraceRef[];
+/** An eval attached to a flow, as listed in the flow's detail. */
+export interface FlowEvalRef {
+  id: string;
+  label: string;
+  rule: string;
+  autorun: boolean;
+  lastRunAt: string | null;
+}
+
+/** GET /api/flows/:id — the full flow definition with its newest members and attached evals. */
+export interface FlowDetail extends FlowSummary {
+  members: FlowMember[];
+  evals: FlowEvalRef[];
+}
+
+/** Inputs for creating a flow (POST /api/flows) — at least one of `selector` / `rule` required. */
+export interface FlowCreateInput {
+  name: string;
+  description?: string;
+  selector?: FlowSelector | null;
+  rule?: string | null;
+  classify?: FlowClassify;
+}
+
+/** POST /api/flows response — the new id, its materialized member count, and any LLM backfill size. */
+export interface FlowCreateResponse {
+  id: string;
+  memberCount: number;
+  llmBackfill: number;
+}
+
+/** Partial definition update for PATCH /api/flows/:id — `null` clears selector/rule. */
+export interface FlowPatch {
+  name?: string;
+  description?: string;
+  selector?: FlowSelector | null;
+  rule?: string | null;
+  classify?: FlowClassify;
+  status?: FlowStatus;
+}
+
+/** A flow member enriched with its trace's input preview, for the audit sample. */
+export interface FlowAuditMember extends FlowMember {
+  inputPreview: string | null;
+}
+
+/** GET /api/flows/:id/audit — classification-quality snapshot for one flow. */
+export interface FlowAudit {
+  flowId: string;
+  /** Newest-members sample with intent previews. */
+  sample: FlowAuditMember[];
+  /** Every low-confidence LLM assignment. */
+  lowConfidence: FlowAuditMember[];
+  counts: { members: number; lowConfidence: number; unclassifiedStoreWide: number };
 }
 
 /** One eval + its latest-run rollup, as listed by GET /api/evals. */
@@ -234,6 +325,12 @@ export interface EvalSummary {
   /** Provenance: `deviation` (saved from a discovered type) or `manual`. */
   source: string;
   sourceDeviationId: string | null;
+  /** The flow this eval is scoped to (runs sample its members); null = global. */
+  flowId: string | null;
+  /** Whether the server auto-reruns this eval when its flow accrues new members. */
+  autorun: boolean;
+  /** New member traces (since the last run) needed to trigger an automatic rerun. */
+  autorunThreshold: number;
   createdAt: string;
   /** The most recent run that scored this eval (null before any run). */
   latestRunId: string | null;
@@ -344,21 +441,7 @@ const getJson = async <T>(path: string): Promise<T> => {
 export const isNotFoundError = (err: unknown): boolean =>
   err instanceof HttpError ? err.status === 404 : err instanceof Error && /\b404\b/.test(err.message);
 
-/**
- * Thrown when a run-trigger POST is rejected with 409 because another run holds
- * the shared single-run lock. Carries the active run's id so the caller can
- * adopt (poll) it instead of dead-ending on an error.
- */
-export class RunInProgressError extends HttpError {
-  readonly runId: string | null;
-  constructor(message: string, runId: string | null) {
-    super(409, message);
-    this.name = "RunInProgressError";
-    this.runId = runId;
-  }
-}
-
-/** POST JSON to the local API, throwing the server's `error` text when it sends one (e.g. 409 run-in-progress). */
+/** POST JSON to the local API, throwing the server's `error` text on non-2xx. */
 const postJson = async <T>(path: string, body: unknown = {}): Promise<T> => {
   const res = await fetch(path, {
     method: "POST",
@@ -367,15 +450,12 @@ const postJson = async <T>(path: string, body: unknown = {}): Promise<T> => {
   });
   if (!res.ok) {
     let message = `Request to ${path} failed: ${res.status} ${res.statusText}`;
-    let runId: string | null = null;
     try {
-      const payload = (await res.json()) as { error?: unknown; runId?: unknown } | null;
+      const payload = (await res.json()) as { error?: unknown } | null;
       if (payload && typeof payload.error === "string" && payload.error) message = payload.error;
-      if (payload && typeof payload.runId === "string") runId = payload.runId;
     } catch {
       /* keep the generic message */
     }
-    if (res.status === 409) throw new RunInProgressError(message, runId);
     throw new HttpError(res.status, message);
   }
   return (await res.json()) as T;
@@ -430,6 +510,7 @@ export const fetchTraces = (
   if (filters.q) params.set("q", filters.q);
   if (filters.agent) params.set("agent", filters.agent);
   if (filters.status) params.set("status", filters.status);
+  if (filters.flow) params.set("flow", filters.flow);
   return getJson<TraceListResponse>(`/api/traces?${params.toString()}`);
 };
 
@@ -486,12 +567,29 @@ export const fetchDeviations = (): Promise<DeviationListResponse> =>
 export const fetchDeviation = (id: string): Promise<DeviationDetail> =>
   getJson<DeviationDetail>(`/api/deviations/${encodeURIComponent(id)}`);
 
-/** Load the discovered flows (GET /api/flows). */
-export const fetchFlows = (): Promise<FlowListResponse> => getJson<FlowListResponse>("/api/flows");
+/** Load the durable flows, active by default (GET /api/flows?status=). */
+export const fetchFlows = (status: FlowStatus | "all" = "active"): Promise<FlowListResponse> =>
+  getJson<FlowListResponse>(`/api/flows?status=${status}`);
 
-/** Load one flow with its member traces (GET /api/flows/:id). */
+/** Load one flow's full definition + members + attached evals (GET /api/flows/:id). */
 export const fetchFlow = (id: string): Promise<FlowDetail> =>
   getJson<FlowDetail>(`/api/flows/${encodeURIComponent(id)}`);
+
+/** Create a durable flow from a selector and/or rule (POST /api/flows). */
+export const createFlow = (input: FlowCreateInput): Promise<FlowCreateResponse> =>
+  postJson<FlowCreateResponse>("/api/flows", input);
+
+/** Update a flow's definition/status and get the fresh detail back (PATCH /api/flows/:id). */
+export const updateFlow = (id: string, patch: FlowPatch): Promise<FlowDetail> =>
+  patchJson<FlowDetail>(`/api/flows/${encodeURIComponent(id)}`, patch);
+
+/** Delete a flow (memberships go with it; attached evals become global) (DELETE /api/flows/:id). */
+export const deleteFlow = (id: string): Promise<Record<string, never>> =>
+  delJson<Record<string, never>>(`/api/flows/${encodeURIComponent(id)}`);
+
+/** Load one flow's classification-quality audit (GET /api/flows/:id/audit). */
+export const fetchFlowAudit = (id: string): Promise<FlowAudit> =>
+  getJson<FlowAudit>(`/api/flows/${encodeURIComponent(id)}/audit`);
 
 /** Load the status of one background run (GET /api/runs/:id). */
 export const fetchRun = (id: string): Promise<RunStatus> =>
@@ -501,11 +599,14 @@ export const fetchRun = (id: string): Promise<RunStatus> =>
 export const cancelRun = (id: string): Promise<Record<string, never>> =>
   postJson<Record<string, never>>(`/api/runs/${encodeURIComponent(id)}/cancel`);
 
-/** Start a deviation-discovery run (POST /api/discovery/run); throws the server's error text on 409. */
-export const runDiscovery = (sampleSize?: number): Promise<RunHandle> =>
-  postJson<RunHandle>("/api/discovery/run", sampleSize != null ? { sampleSize } : {});
+/** Start a deviation-discovery run, optionally scoped to one flow's members (POST /api/discovery/run → 202). */
+export const runDiscovery = (sampleSize?: number, flowId?: string): Promise<RunHandle> =>
+  postJson<RunHandle>("/api/discovery/run", {
+    ...(sampleSize != null ? { sampleSize } : {}),
+    ...(flowId ? { flowId } : {}),
+  });
 
-/** Start a flow-grouping run (POST /api/flows/run); throws the server's error text on 409. */
+/** Start the discover-flows bootstrap — adds durable flows, never replaces (POST /api/flows/run → 202). */
 export const runFlows = (): Promise<RunHandle> => postJson<RunHandle>("/api/flows/run");
 
 /** Load every saved eval with its latest-run rollup (GET /api/evals). */
@@ -515,9 +616,9 @@ export const fetchEvals = (): Promise<EvalListResponse> => getJson<EvalListRespo
 export const fetchEval = (id: string): Promise<EvalDetail> =>
   getJson<EvalDetail>(`/api/evals/${encodeURIComponent(id)}`);
 
-/** Save a discovered deviation as a repeatable eval (POST /api/evals). */
-export const saveEvalFromDeviation = (deviationId: string): Promise<{ id: string }> =>
-  postJson<{ id: string }>("/api/evals", { deviationId });
+/** Save a discovered deviation as a repeatable eval, optionally scoped to a flow (POST /api/evals). */
+export const saveEvalFromDeviation = (deviationId: string, flowId?: string): Promise<{ id: string }> =>
+  postJson<{ id: string }>("/api/evals", { deviationId, ...(flowId ? { flowId } : {}) });
 
 /** Start a fix-generation run for a deviation (POST /api/deviations/:id/fix); throws the server's error text on 409. */
 export const generateDeviationFix = (id: string): Promise<RunHandle> =>
@@ -531,19 +632,28 @@ export const resolveDeviation = (id: string): Promise<{ status: string }> =>
 export const reopenDeviation = (id: string): Promise<{ status: string }> =>
   postJson<{ status: string }>(`/api/deviations/${encodeURIComponent(id)}/reopen`);
 
-/** Create a hand-written eval from a label + rule (POST /api/evals). */
+/** Create a hand-written eval from a label + rule (+ optional flow scope / autorun tuning) (POST /api/evals). */
 export const createEval = (input: {
   label: string;
   rule: string;
   description?: string;
+  flowId?: string;
+  autorun?: boolean;
+  autorunThreshold?: number;
 }): Promise<{ id: string }> => postJson<{ id: string }>("/api/evals", input);
 
-/** Start an eval-scoring run (POST /api/evals/:id/run); throws the server's error text on 409. */
-export const runEval = (evalId: string, sampleSize?: number): Promise<RunHandle> =>
-  postJson<RunHandle>(
-    `/api/evals/${encodeURIComponent(evalId)}/run`,
-    sampleSize != null ? { sampleSize } : {},
-  );
+/** Patch an eval's flow binding / autorun tuning and get the fresh detail back (PATCH /api/evals/:id). */
+export const updateEval = (
+  id: string,
+  patch: { flowId?: string | null; autorun?: boolean; autorunThreshold?: number },
+): Promise<EvalDetail> => patchJson<EvalDetail>(`/api/evals/${encodeURIComponent(id)}`, patch);
+
+/** Start an eval-scoring run with optional sample-size / judge-model overrides (POST /api/evals/:id/run → 202). */
+export const runEval = (evalId: string, sampleSize?: number, model?: string): Promise<RunHandle> =>
+  postJson<RunHandle>(`/api/evals/${encodeURIComponent(evalId)}/run`, {
+    ...(sampleSize != null ? { sampleSize } : {}),
+    ...(model ? { model } : {}),
+  });
 
 /** Delete an eval and its stored verdicts (DELETE /api/evals/:id). */
 export const deleteEval = (id: string): Promise<Record<string, never>> =>

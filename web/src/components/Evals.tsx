@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import type { EvalSummary } from "../api";
-import { createEval, fetchEvals } from "../api";
+import type { EvalSummary, FlowSummary } from "../api";
+import { createEval, fetchEvals, fetchFlows } from "../api";
 import { formatNumber, relativeTime } from "../format";
 
 /** A compact pass/fail proportion bar for one eval's latest run (empty when never run). */
@@ -27,11 +27,27 @@ export const HealthBadge = ({ ev }: { ev: EvalSummary }) => {
   return <span className="eval-health eval-health-pass">All passing</span>;
 };
 
-/** Inline "new eval" form — a hand-written label + rule (+ optional description). */
-const NewEvalForm = ({ onCreated }: { onCreated: () => void }) => {
+/** Flow-binding chip: links to the flow when bound, or a muted "global" marker. */
+export const FlowChip = ({ flowId, flowName }: { flowId: string | null; flowName?: string }) => {
+  if (!flowId) return <span className="muted">global</span>;
+  return (
+    <a
+      className="tag tag-link"
+      href={`#/flow/${encodeURIComponent(flowId)}`}
+      onClick={(e) => e.stopPropagation()}
+      title="View the flow this eval samples"
+    >
+      {flowName ?? "flow"}
+    </a>
+  );
+};
+
+/** Inline "new eval" form — a hand-written label + rule (+ optional description / flow scope). */
+const NewEvalForm = ({ flows, onCreated }: { flows: FlowSummary[]; onCreated: () => void }) => {
   const [label, setLabel] = useState("");
   const [rule, setRule] = useState("");
   const [description, setDescription] = useState("");
+  const [flowId, setFlowId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -47,10 +63,12 @@ const NewEvalForm = ({ onCreated }: { onCreated: () => void }) => {
           label: label.trim(),
           rule: rule.trim(),
           description: description.trim() || undefined,
+          flowId: flowId || undefined,
         });
         setLabel("");
         setRule("");
         setDescription("");
+        setFlowId("");
         onCreated();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not create eval.");
@@ -58,7 +76,7 @@ const NewEvalForm = ({ onCreated }: { onCreated: () => void }) => {
         setBusy(false);
       }
     },
-    [label, rule, description, busy, onCreated],
+    [label, rule, description, flowId, busy, onCreated],
   );
 
   return (
@@ -99,6 +117,26 @@ const NewEvalForm = ({ onCreated }: { onCreated: () => void }) => {
           onChange={(e) => setDescription(e.target.value)}
         />
       </div>
+      {flows.length > 0 ? (
+        <div className="new-eval-field">
+          <label className="new-eval-label" htmlFor="eval-flow">
+            Flow <span className="muted">(optional — runs sample this flow's members)</span>
+          </label>
+          <select
+            id="eval-flow"
+            className="new-eval-input"
+            value={flowId}
+            onChange={(e) => setFlowId(e.target.value)}
+          >
+            <option value="">Global — sample all traces</option>
+            {flows.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      ) : null}
       {error ? <p className="runbar-error">{error}</p> : null}
       <div className="new-eval-actions">
         <button className="btn" type="submit" disabled={busy || !label.trim() || !rule.trim()}>
@@ -109,17 +147,22 @@ const NewEvalForm = ({ onCreated }: { onCreated: () => void }) => {
   );
 };
 
-/** The evals view (#/evals): every saved rule + its latest pass/fail rollup and regression watch. */
+/** The evals view (#/evals): every saved rule + its flow binding, latest pass/fail rollup, and regression watch. */
 export const Evals = () => {
   const [items, setItems] = useState<EvalSummary[]>([]);
+  const [flows, setFlows] = useState<FlowSummary[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [showForm, setShowForm] = useState(false);
 
-  /** Reload the eval list from the server. */
+  /** Reload the eval list (and, best-effort, the flows for name lookups + the form's picker). */
   const load = useCallback(async () => {
     try {
-      const res = await fetchEvals();
+      const [res, flowsRes] = await Promise.all([
+        fetchEvals(),
+        fetchFlows("all").catch(() => ({ items: [] as FlowSummary[], unclassified: 0 })),
+      ]);
       setItems(res.items);
+      setFlows(flowsRes.items);
       setStatus("ready");
     } catch {
       setStatus("error");
@@ -170,7 +213,9 @@ export const Evals = () => {
         </div>
         {newButton}
       </div>
-      {showForm ? <NewEvalForm onCreated={onCreated} /> : null}
+      {showForm ? (
+        <NewEvalForm flows={flows.filter((f) => f.status === "active")} onCreated={onCreated} />
+      ) : null}
       {items.length === 0 ? (
         <div className="notice">No evals yet — create one above.</div>
       ) : (
@@ -179,6 +224,7 @@ export const Evals = () => {
             <thead>
               <tr>
                 <th>Eval</th>
+                <th>Flow</th>
                 <th className="col-bar">Latest result</th>
                 <th className="col-num">Passing</th>
                 <th>Status</th>
@@ -199,6 +245,14 @@ export const Evals = () => {
                       {ev.label}
                     </a>
                     <div className="cell-preview">{ev.rule}</div>
+                  </td>
+                  <td>
+                    <FlowChip flowId={ev.flowId} flowName={flows.find((f) => f.id === ev.flowId)?.name} />
+                    {ev.flowId && ev.autorun ? (
+                      <div className="cell-preview" title={`Reruns after ${ev.autorunThreshold} new member traces`}>
+                        autorun ≥{formatNumber(ev.autorunThreshold)}
+                      </div>
+                    ) : null}
                   </td>
                   <td className="col-bar">
                     <ResultBar passed={ev.passed} failed={ev.failed} />

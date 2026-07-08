@@ -40,7 +40,8 @@ CREATE TABLE IF NOT EXISTS traces (
   tokens_in integer,
   tokens_out integer,
   input_preview text,
-  output_preview text
+  output_preview text,
+  classified_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS traces_received_at_idx ON traces (received_at DESC);
 CREATE TABLE IF NOT EXISTS runs (
@@ -86,18 +87,28 @@ CREATE TABLE IF NOT EXISTS deviation_examples (
 CREATE INDEX IF NOT EXISTS deviation_examples_deviation_id_idx ON deviation_examples (deviation_id);
 CREATE TABLE IF NOT EXISTS flows (
   id text PRIMARY KEY,
-  run_id text NOT NULL,
+  run_id text,
   name text NOT NULL,
   description text NOT NULL,
-  trace_count integer NOT NULL,
-  created_at timestamptz NOT NULL DEFAULT now()
+  trace_count integer NOT NULL DEFAULT 0,
+  selector jsonb,
+  rule text,
+  classify text NOT NULL DEFAULT 'selector',
+  status text NOT NULL DEFAULT 'active',
+  created_by text NOT NULL DEFAULT 'user',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS flows_run_id_idx ON flows (run_id);
 CREATE TABLE IF NOT EXISTS flow_traces (
   flow_id text NOT NULL,
   trace_id text NOT NULL,
+  assigned_by text NOT NULL DEFAULT 'selector',
+  confidence text,
+  assigned_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (flow_id, trace_id)
 );
+CREATE INDEX IF NOT EXISTS flow_traces_trace_id_idx ON flow_traces (trace_id);
 CREATE TABLE IF NOT EXISTS evals (
   id text PRIMARY KEY,
   label text NOT NULL,
@@ -105,6 +116,10 @@ CREATE TABLE IF NOT EXISTS evals (
   rule text NOT NULL,
   source text NOT NULL,
   source_deviation_id text,
+  flow_id text,
+  autorun boolean NOT NULL DEFAULT true,
+  autorun_threshold integer NOT NULL DEFAULT 10,
+  last_run_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS evals_created_at_idx ON evals (created_at DESC);
@@ -130,6 +145,52 @@ CREATE TABLE IF NOT EXISTS llm_usage (
   cost_usd double precision NOT NULL
 );
 CREATE INDEX IF NOT EXISTS llm_usage_at_idx ON llm_usage (at DESC);
+-- ── Durable-flows revamp (0.2) upgrade for pre-existing datadirs ─────────────
+-- Each block is guarded on a marker column so its one-time backfill runs exactly
+-- once; the plain ALTERs below the blocks are idempotent on their own.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'flows' AND column_name = 'selector') THEN
+    ALTER TABLE flows ADD COLUMN selector jsonb;
+    ALTER TABLE flows ADD COLUMN rule text;
+    ALTER TABLE flows ADD COLUMN classify text NOT NULL DEFAULT 'selector';
+    ALTER TABLE flows ADD COLUMN status text NOT NULL DEFAULT 'active';
+    ALTER TABLE flows ADD COLUMN created_by text NOT NULL DEFAULT 'user';
+    ALTER TABLE flows ADD COLUMN updated_at timestamptz NOT NULL DEFAULT now();
+    -- Legacy clustered flows were discovery output defined only by their description.
+    UPDATE flows SET created_by = 'discovery', classify = 'llm', rule = description WHERE run_id IS NOT NULL;
+    -- Only the newest clustering run's set stays active (the old UI showed exactly that);
+    -- earlier runs' duplicates are archived rather than deleted.
+    UPDATE flows SET status = 'archived'
+      WHERE run_id IS NOT NULL
+        AND run_id <> (SELECT run_id FROM flows WHERE run_id IS NOT NULL ORDER BY created_at DESC, id DESC LIMIT 1);
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'flow_traces' AND column_name = 'assigned_by') THEN
+    ALTER TABLE flow_traces ADD COLUMN assigned_by text NOT NULL DEFAULT 'selector';
+    ALTER TABLE flow_traces ADD COLUMN confidence text;
+    ALTER TABLE flow_traces ADD COLUMN assigned_at timestamptz NOT NULL DEFAULT now();
+    -- Every pre-revamp membership came from the LLM clustering pass.
+    UPDATE flow_traces SET assigned_by = 'llm';
+  END IF;
+END $$;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'traces' AND column_name = 'classified_at') THEN
+    ALTER TABLE traces ADD COLUMN classified_at timestamptz;
+    -- Treat pre-revamp history as already swept, so upgrading never triggers a
+    -- (potentially expensive) LLM sweep over the whole store. New flows opt into
+    -- a bounded backfill instead.
+    UPDATE traces SET classified_at = now();
+  END IF;
+END $$;
+ALTER TABLE flows ALTER COLUMN run_id DROP NOT NULL;
+ALTER TABLE flows ALTER COLUMN trace_count SET DEFAULT 0;
+ALTER TABLE evals ADD COLUMN IF NOT EXISTS flow_id text;
+ALTER TABLE evals ADD COLUMN IF NOT EXISTS autorun boolean NOT NULL DEFAULT true;
+ALTER TABLE evals ADD COLUMN IF NOT EXISTS autorun_threshold integer NOT NULL DEFAULT 10;
+ALTER TABLE evals ADD COLUMN IF NOT EXISTS last_run_at timestamptz;
+CREATE INDEX IF NOT EXISTS flow_traces_trace_id_idx ON flow_traces (trace_id);
+CREATE INDEX IF NOT EXISTS traces_unclassified_idx ON traces (received_at) WHERE classified_at IS NULL;
 `;
 
 /** Reads the local API key from <home>/local-api-key, generating one (glsk_local_ + 48 hex, mode 0600) on first boot. */
@@ -166,11 +227,12 @@ export const bootstrap = async (home = resolveHome()): Promise<CoachRuntime> => 
   await client.waitReady;
   await client.exec(BOOTSTRAP_SQL);
   // Reconcile orphaned runs: the server is single-process, so any run still
-  // 'running' at boot was interrupted by a crash/restart and will never finish
-  // (its in-process runner promise is gone). Mark it errored so the dashboard's
-  // poll loop and the MCP wait-for-run don't hang on a permanently-'running' row.
+  // 'running' (or waiting 'queued' in the in-memory FIFO) at boot was
+  // interrupted by a crash/restart and will never finish. Mark it errored so
+  // the dashboard's poll loop and the CLI's wait-for-run don't hang on a
+  // permanently-live row.
   await client.exec(
-    `UPDATE runs SET status = 'error', finished_at = now(), error = 'interrupted by a server restart' WHERE status = 'running';`,
+    `UPDATE runs SET status = 'error', finished_at = now(), error = 'interrupted by a server restart' WHERE status IN ('running', 'queued');`,
   );
   const db = drizzle(client, { schema });
   return { home, apiKey, client, db };

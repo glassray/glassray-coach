@@ -1,10 +1,13 @@
 #!/usr/bin/env node
 /**
  * glassray CLI — zero-dependency plain ESM.
- * Commands: start (default) | mcp | reset | status | doctor.
+ * Bare `glassray` (and `help` / `--help`) prints the branded landing screen.
+ * Server commands: start | init | reset | status | doctor.
+ * Data commands (bin/commands.mjs): traces | stats | usage | flows | evals |
+ * deviations | discovery | fix | runs — pure JSON on stdout, for coding agents.
  */
 import { spawn } from 'node:child_process';
-import { mkdir, rm, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { homedir } from 'node:os';
@@ -12,6 +15,30 @@ import path from 'node:path';
 import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
+import { MANAGEMENT_COMMANDS, showLanding } from './landing.mjs';
+import {
+  GUIDES,
+  PALETTE,
+  VERSION,
+  bullet,
+  compactBrand,
+  compareVersions,
+  cross,
+  dim,
+  fetchLatestVersion,
+  link,
+  maybeScheduleUpdateRefresh,
+  paint,
+  readUpdateNotice,
+  updateCheckOptedOut,
+} from './ui.mjs';
+
+// A consumer closing the pipe (`| head`, `| jq -e` …) is a normal end of
+// output for a JSON-emitting CLI, not a crash.
+process.stdout.on('error', (err) => {
+  if (err?.code === 'EPIPE') process.exit(0);
+  throw err;
+});
 
 /** Repo-relative root of the coach package (this file lives in coach/bin/). */
 const COACH_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -21,6 +48,9 @@ const DEFAULT_PORT = 5899;
 
 /** Resolves the data directory: --data-dir > $GLASSRAY_HOME > ~/.glassray. */
 const resolveHome = (dataDir) => dataDir ?? process.env.GLASSRAY_HOME ?? path.join(homedir(), '.glassray');
+
+/** Print one red-✗ error line to stderr. */
+const errorLine = (message) => console.error(`${cross()} ${message}`);
 
 /** Fetches /api/info from a running coach, or null when unreachable. */
 const fetchInfo = async (port, timeoutMs = 1000) => {
@@ -60,15 +90,16 @@ const isPortFree = (port) =>
     probe.listen(port, '127.0.0.1');
   });
 
-/** Prints the copy-paste connection block (dashboard, ingest, key, OTEL env). */
-const printConnectBlock = (info, port) => {
+/** Prints the branded connection card (dashboard, ingest, key, OTEL env, next steps). */
+const printConnectBlock = (info, port, updateNotice = null) => {
   const dashboard = `http://127.0.0.1:${port}/`;
   console.log('');
-  console.log('  Glassray Coach is running');
+  console.log(`  ${compactBrand()}`);
   console.log('');
-  console.log(`    Dashboard  ${dashboard}`);
-  console.log(`    Ingest     ${info.ingestEndpoint}`);
-  console.log(`    API key    ${info.apiKey}`);
+  console.log(`  ${bullet('ok')} Coach ${dim(`v${info.version ?? VERSION}`)} is running`);
+  console.log(`    Dashboard   ${link(dashboard)}`);
+  console.log(`    Ingest      ${info.ingestEndpoint}`);
+  console.log(`    API key     ${info.apiKey}`);
   console.log('');
   console.log("  Point your agent's OTLP exporter at it:");
   console.log('');
@@ -76,20 +107,29 @@ const printConnectBlock = (info, port) => {
   console.log('    export OTEL_EXPORTER_OTLP_PROTOCOL="http/json"');
   console.log(`    export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${info.apiKey}"`);
   console.log('');
+  console.log(
+    `  Next: ${paint('glassray init', PALETTE.brand)} in your agent's repo · quickstart ${link(GUIDES.quickstart)}`,
+  );
+  if (updateNotice) {
+    console.log('');
+    console.log(`  ${updateNotice}`);
+  }
+  console.log('');
 };
 
-/** start: spawn the server (tsx), wait for /api/info, print the connect block, open the browser. */
+/** start: spawn the server (tsx), wait for /api/info, print the connect card, open the browser. */
 const cmdStart = async ({ port, dataDir, noOpen }) => {
   const home = resolveHome(dataDir);
+  maybeScheduleUpdateRefresh(home);
   if (!(await isPortFree(port))) {
     const running = await fetchInfo(port);
     if (running) {
       console.log(`glassray already running on port ${port}`);
-      printConnectBlock(running, port);
+      printConnectBlock(running, port, readUpdateNotice(home));
       if (!noOpen) openBrowser(`http://127.0.0.1:${port}/`);
       return;
     }
-    console.error(`error: port ${port} is in use by something else — pass --port <n> to pick another`);
+    errorLine(`port ${port} is in use by something else — pass --port <n> to pick another`);
     process.exit(1);
   }
 
@@ -106,7 +146,7 @@ const cmdStart = async ({ port, dataDir, noOpen }) => {
   process.on('SIGINT', () => child.kill('SIGINT'));
   process.on('SIGTERM', () => child.kill('SIGTERM'));
 
-  // Wait (up to ~20s) for the server to answer, then print the connect block.
+  // Wait (up to ~20s) for the server to answer, then print the connect card.
   const deadline = Date.now() + 20_000;
   let info = null;
   while (info === null && Date.now() < deadline) {
@@ -114,32 +154,74 @@ const cmdStart = async ({ port, dataDir, noOpen }) => {
     info = await fetchInfo(port);
   }
   if (info === null) {
-    console.error('error: server did not come up within 20s (see logs above)');
+    errorLine('server did not come up within 20s (see logs above)');
     child.kill('SIGTERM');
     process.exit(1);
   }
-  printConnectBlock(info, port);
+  printConnectBlock(info, port, readUpdateNotice(home));
   if (!noOpen) openBrowser(`http://127.0.0.1:${port}/`);
 };
 
-/** mcp: run the stdio MCP server (server/mcp.ts) that proxies the running coach over loopback. */
-const cmdMcp = ({ port }) => {
-  // stderr ONLY — stdout is the MCP JSON-RPC channel.
-  const invoke = `node ${path.join(COACH_ROOT, 'bin', 'glassray.mjs')}`;
-  const portFlag = port === DEFAULT_PORT ? '' : ` --port ${port}`;
-  console.error(`hint: claude mcp add glassray -- ${invoke} mcp${portFlag}`);
-  const child = spawn(
-    process.execPath,
-    ['--import', 'tsx', path.join(COACH_ROOT, 'server', 'mcp.ts')],
-    {
-      cwd: COACH_ROOT,
-      env: { ...process.env, GLASSRAY_PORT: String(port) },
-      stdio: ['inherit', 'inherit', 'inherit'],
-    },
+/** mcp: removed in 0.2 — the CLI (plus the installable skill) is the one agent-facing surface now. */
+const cmdMcp = () => {
+  errorLine(
+    'glassray mcp was removed in 0.2 — Coach is now driven through the CLI. ' +
+      'Run `glassray init` to install the Claude Code skill, then use the resource commands ' +
+      '(see `glassray --help`). If you had it registered: `claude mcp remove glassray`.',
   );
-  child.on('exit', (code) => process.exit(code ?? 0));
-  process.on('SIGINT', () => child.kill('SIGINT'));
-  process.on('SIGTERM', () => child.kill('SIGTERM'));
+  process.exit(1);
+};
+
+/** Source of the bundled agent skill that `glassray init` installs. */
+const SKILL_SOURCE = path.join(COACH_ROOT, 'skills', 'glassray', 'SKILL.md');
+
+/**
+ * Where `init` installs the skill — one file, both standard locations, plain
+ * copies (symlinks are unreliable on Windows): `.agents/skills/` is the open
+ * Agent Skills standard (agentskills.io — Codex, VS Code, Copilot);
+ * `.claude/skills/` is what Claude Code discovers.
+ */
+const SKILL_DESTS = [
+  path.join('.agents', 'skills', 'glassray', 'SKILL.md'),
+  path.join('.claude', 'skills', 'glassray', 'SKILL.md'),
+];
+
+/** init: install the bundled agent skill into the current repo (both skill directories). */
+const cmdInit = async ({ force, dataDir }) => {
+  if (!existsSync(SKILL_SOURCE)) {
+    errorLine(`skill file missing at ${SKILL_SOURCE} — this install has no skills/ directory (try reinstalling @glassray/coach)`);
+    process.exit(1);
+  }
+  const source = await readFile(SKILL_SOURCE, 'utf8');
+
+  // Refuse before touching anything: a modified copy in EITHER location needs
+  // an explicit --force, so a partial install can't clobber local edits.
+  const dests = SKILL_DESTS.map((rel) => path.join(process.cwd(), rel));
+  if (!force) {
+    for (const dest of dests) {
+      if (existsSync(dest) && (await readFile(dest, 'utf8')) !== source) {
+        errorLine(`${dest} already exists with different content — pass --force to overwrite`);
+        process.exit(1);
+      }
+    }
+  }
+
+  let wrote = 0;
+  for (const dest of dests) {
+    if (!force && existsSync(dest) && (await readFile(dest, 'utf8')) === source) continue;
+    await mkdir(path.dirname(dest), { recursive: true });
+    await writeFile(dest, source);
+    wrote += 1;
+  }
+  maybeScheduleUpdateRefresh(resolveHome(dataDir));
+  console.log('');
+  console.log(`  ${bullet('ok')} agent skill ${wrote === 0 ? 'already installed (up to date)' : 'installed'}`);
+  console.log(`    ${dests[0]}   ${dim('(Agent Skills standard — Codex, VS Code, Copilot)')}`);
+  console.log(`    ${dests[1]}   ${dim('(Claude Code)')}`);
+  console.log('');
+  console.log('  Next: ask your coding agent to set up flows and evals for your agent.');
+  console.log(`  Docs: ${link(GUIDES.cli)}`);
+  console.log('');
 };
 
 /** reset: wipe the data directory (confirm unless --yes). */
@@ -162,40 +244,59 @@ const cmdReset = async ({ dataDir, yes }) => {
   console.log(`wiped ${home}`);
 };
 
-/** status: report data dir and whether a coach answers on the port. */
+/** status: the branded state card — server, data dir, key file, update notice. */
 const cmdStatus = async ({ port, dataDir }) => {
   const home = resolveHome(dataDir);
-  console.log(`data dir  ${home}${existsSync(home) ? '' : ' (missing)'}`);
-  console.log(`key file  ${path.join(home, 'local-api-key')}${existsSync(path.join(home, 'local-api-key')) ? '' : ' (missing)'}`);
+  // Capture existence BEFORE scheduling the update refresh — the detached
+  // child may create the data dir (for its cache) while we report on it.
+  const homeExists = existsSync(home);
+  maybeScheduleUpdateRefresh(home);
+  const keyFile = path.join(home, 'local-api-key');
   const info = await fetchInfo(port);
+  console.log('');
+  console.log(`  ${compactBrand()}`);
+  console.log('');
   if (info) {
-    console.log(`server    running on http://127.0.0.1:${port}/ (v${info.version})`);
+    console.log(`  ${bullet('ok')} server running on ${link(`http://127.0.0.1:${port}/`)} ${dim(`(v${info.version})`)}`);
   } else {
-    console.log(`server    not running on port ${port}`);
+    console.log(`  ${bullet('down')} server not running on port ${port}`);
+    console.log(`    Start one:   ${paint('glassray start', PALETTE.brand)}`);
   }
+  console.log(`    Data dir    ${home}${homeExists ? '' : dim(' (missing)')}`);
+  console.log(`    Key file    ${keyFile}${existsSync(keyFile) ? '' : dim(' (missing)')}`);
+  const notice = readUpdateNotice(home);
+  if (notice) {
+    console.log('');
+    console.log(`  ${notice}`);
+  }
+  console.log('');
 };
 
-/** doctor: environment checks with one-line fixes. */
+/** doctor: environment checks with one-line fixes, plus the one live update check. */
 const cmdDoctor = async ({ port, dataDir }) => {
   const home = resolveHome(dataDir);
+  const ok = (msg) => console.log(`  ${paint('ok  ', PALETTE.brand)} ${msg}`);
+  const failLine = (msg) => console.log(`  ${paint('FAIL', PALETTE.error)} ${msg}`);
+  const note = (msg) => console.log(`  ${paint('note', PALETTE.warn)} ${msg}`);
   let failures = 0;
 
-  // Floor is 20.6: the `start`/`mcp` spawns use `node --import`, added in 20.6.0.
+  console.log('');
+  // Floor is 20.6: the `start` spawn uses `node --import`, added in 20.6.0.
   const [major, minor] = process.versions.node.split('.').map(Number);
   if (major > 20 || (major === 20 && minor >= 6)) {
-    console.log(`ok    node ${process.versions.node}`);
+    ok(`node ${process.versions.node}`);
   } else {
     failures += 1;
-    console.log(`FAIL  node ${process.versions.node} — install Node 20.6+ (e.g. \`nvm install 20 && nvm use 20\`)`);
+    failLine(`node ${process.versions.node} — install Node 20.6+ (e.g. \`nvm install 20 && nvm use 20\`)`);
   }
 
   if (await isPortFree(port)) {
-    console.log(`ok    port ${port} is free`);
+    ok(`port ${port} is free`);
   } else if (await fetchInfo(port)) {
-    console.log(`ok    port ${port} is in use by a running glassray`);
+    ok(`port ${port} is in use by a running glassray`);
   } else {
     failures += 1;
-    console.log(`FAIL  port ${port} is in use by another process — stop it or pass --port <n>`);
+    failLine(`port ${port} is in use by another process — stop it or pass --port <n>`);
   }
 
   // A diagnostic shouldn't leave state behind: if the data dir didn't exist,
@@ -206,80 +307,195 @@ const cmdDoctor = async ({ port, dataDir }) => {
     const probe = path.join(home, '.write-probe');
     await writeFile(probe, 'ok');
     await unlink(probe);
-    console.log(`ok    data dir ${home} is writable`);
+    ok(`data dir ${home} is writable`);
   } catch {
     failures += 1;
-    console.log(`FAIL  data dir ${home} is not writable — fix permissions or set GLASSRAY_HOME to a writable path`);
+    failLine(`data dir ${home} is not writable — fix permissions or set GLASSRAY_HOME to a writable path`);
   } finally {
     if (!homeExisted) await rm(home, { recursive: true, force: true }).catch(() => {});
   }
 
+  // The one live update check (a diagnostic wants the truth now) — informational
+  // only, honors the opt-out envs, and never counts as a failure.
+  if (!updateCheckOptedOut()) {
+    const latest = await fetchLatestVersion();
+    if (latest === null) note('update check skipped (offline?)');
+    else if (compareVersions(latest, VERSION) > 0) note(`${latest} is available (you have ${VERSION}) — npm i -g @glassray/coach`);
+    else ok(`version ${VERSION} (latest)`);
+  }
+
+  console.log('');
   process.exit(failures === 0 ? 0 : 1);
 };
 
-/** Usage text for --help / unknown commands. */
-const USAGE = `glassray — local AI-agent trace viewer
+/** Command words served by bin/commands.mjs (everything else is server management). */
+const RESOURCE_COMMANDS = new Set([
+  'traces',
+  'stats',
+  'usage',
+  'flows',
+  'evals',
+  'deviations',
+  'discovery',
+  'fix',
+  'runs',
+]);
 
-Usage: glassray [command] [flags]
+/** Validate + normalize a port value (flag or $GLASSRAY_PORT); exits 1 when unusable. */
+const resolvePort = (raw) => {
+  // An unset flag/env — or an empty env var — means the default.
+  if (raw === undefined || raw === '') return DEFAULT_PORT;
+  // parseArgs (strict:false) yields `true` for a bare `--port` with no value.
+  if (typeof raw !== 'string') {
+    errorLine('--port requires a value');
+    process.exit(1);
+  }
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port <= 0 || port >= 65_536) {
+    errorLine(`invalid --port ${raw}`);
+    process.exit(1);
+  }
+  return port;
+};
 
-Commands:
-  start     Start the server + dashboard (default)
-  mcp       Run a stdio MCP server for coding agents (proxies the running coach)
-  reset     Wipe the data directory
-  status    Show data dir and whether the server is up
-  doctor    Check node version, port, and data-dir writability
+const rawArgs = process.argv.slice(2);
 
-Flags:
-  --port <n>       Port to serve on (default ${DEFAULT_PORT})
-  --data-dir <p>   Data directory (default $GLASSRAY_HOME or ~/.glassray)
-  --no-open        Don't open the browser after start
-  --yes            Skip the reset confirmation
-  --help           Show this help
-`;
-
-const { values, positionals } = parseArgs({
+/**
+ * Lenient first pass just to locate the command word + the global flags: only
+ * value-taking globals are declared (so they consume their values); everything
+ * unknown is tolerated — resource commands re-parse their own flags strictly.
+ */
+const probe = parseArgs({
+  args: rawArgs,
   options: {
     port: { type: 'string' },
     'data-dir': { type: 'string' },
-    'no-open': { type: 'boolean', default: false },
-    yes: { type: 'boolean', default: false },
-    help: { type: 'boolean', default: false },
+    help: { type: 'boolean', short: 'h' },
+    version: { type: 'boolean', short: 'V' },
   },
   allowPositionals: true,
+  strict: false,
 });
 
-if (values.help) {
-  console.log(USAGE);
+/**
+ * Index of the command word in rawArgs: the first token that isn't a flag or a
+ * global value-flag's value. `indexOf(command)` would mis-slice when a flag's
+ * VALUE equals a command word (`--data-dir flows flows list`).
+ */
+const commandIndex = (() => {
+  const valueFlags = new Set(['--port', '--data-dir']);
+  for (let i = 0; i < rawArgs.length; i += 1) {
+    const arg = rawArgs[i];
+    if (valueFlags.has(arg)) {
+      i += 1; // skip the flag's value
+      continue;
+    }
+    if (arg.startsWith('-')) continue; // boolean flags and --flag=value forms
+    return i;
+  }
+  return -1;
+})();
+const command = commandIndex >= 0 ? rawArgs[commandIndex] : undefined;
+
+if (probe.values.version === true) {
+  console.log(VERSION);
   process.exit(0);
 }
 
-const port = values.port !== undefined ? Number(values.port) : DEFAULT_PORT;
-if (!Number.isInteger(port) || port <= 0 || port >= 65_536) {
-  console.error(`error: invalid --port ${values.port}`);
-  process.exit(1);
-}
+/** Print the landing screen (the branded help) and exit 0. */
+const landing = async () => {
+  await showLanding({
+    port: resolvePort(probe.values.port ?? process.env.GLASSRAY_PORT),
+    home: resolveHome(typeof probe.values['data-dir'] === 'string' ? probe.values['data-dir'] : undefined),
+  });
+  process.exit(0);
+};
 
-const ctx = { port, dataDir: values['data-dir'], noOpen: values['no-open'], yes: values.yes };
-const command = positionals[0] ?? 'start';
-
-switch (command) {
-  case 'start':
-    await cmdStart(ctx);
-    break;
-  case 'mcp':
-    cmdMcp(ctx);
-    break;
-  case 'reset':
-    await cmdReset(ctx);
-    break;
-  case 'status':
-    await cmdStatus(ctx);
-    break;
-  case 'doctor':
-    await cmdDoctor(ctx);
-    break;
-  default:
-    console.error(`error: unknown command "${command}"\n`);
-    console.log(USAGE);
+// Bare command, `help`, and top-level --help/-h are all the landing screen;
+// `help <resource>` prints that resource's own usage block.
+if (command === undefined || command === 'help') {
+  const topic = command === 'help' ? probe.positionals[1] : undefined;
+  if (topic !== undefined && RESOURCE_COMMANDS.has(topic)) {
+    const { printHelp } = await import('./commands.mjs');
+    printHelp(topic);
+    process.exit(0);
+  }
+  if (topic !== undefined && !MANAGEMENT_COMMANDS.includes(topic)) {
+    errorLine(`unknown command "${topic}" — run \`glassray --help\``);
     process.exit(1);
+  }
+  await landing();
+} else if (RESOURCE_COMMANDS.has(command)) {
+  const rest = rawArgs.slice(commandIndex + 1);
+  const commands = await import('./commands.mjs');
+  if (rest.includes('--help') || rest.includes('-h')) {
+    commands.printHelp(command);
+    process.exit(0);
+  }
+  const port = resolvePort(probe.values.port ?? process.env.GLASSRAY_PORT);
+  /** Resource-command dispatch table: command word → handler in bin/commands.mjs. */
+  const handlers = {
+    traces: commands.cmdTraces,
+    stats: commands.cmdStats,
+    usage: commands.cmdUsage,
+    flows: commands.cmdFlows,
+    evals: commands.cmdEvals,
+    deviations: commands.cmdDeviations,
+    discovery: commands.cmdDiscovery,
+    fix: commands.cmdFix,
+    runs: commands.cmdRuns,
+  };
+  await handlers[command]({ port, args: rest });
+} else {
+  /** Strictly parsed management-command flags; an unknown flag is a usage error, not a stack trace. */
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args: rawArgs,
+      options: {
+        port: { type: 'string' },
+        'data-dir': { type: 'string' },
+        'no-open': { type: 'boolean', default: false },
+        yes: { type: 'boolean', default: false },
+        force: { type: 'boolean', default: false },
+        help: { type: 'boolean', short: 'h', default: false },
+        version: { type: 'boolean', short: 'V', default: false },
+      },
+      allowPositionals: true,
+    });
+  } catch (err) {
+    errorLine(`${err instanceof Error ? err.message : String(err)} — run \`glassray --help\``);
+    process.exit(1);
+  }
+  const { values, positionals } = parsed;
+
+  if (values.help) await landing();
+
+  // Same precedence as the resource commands: --port > $GLASSRAY_PORT > default.
+  const port = resolvePort(values.port ?? process.env.GLASSRAY_PORT);
+  const ctx = { port, dataDir: values['data-dir'], noOpen: values['no-open'], yes: values.yes, force: values.force };
+
+  switch (positionals[0]) {
+    case 'start':
+      await cmdStart(ctx);
+      break;
+    case 'init':
+      await cmdInit(ctx);
+      break;
+    case 'mcp':
+      cmdMcp();
+      break;
+    case 'reset':
+      await cmdReset(ctx);
+      break;
+    case 'status':
+      await cmdStatus(ctx);
+      break;
+    case 'doctor':
+      await cmdDoctor(ctx);
+      break;
+    default:
+      errorLine(`unknown command "${positionals[0]}" — run \`glassray --help\``);
+      process.exit(1);
+  }
 }

@@ -63,7 +63,7 @@ const waitForRun = async (runId: string): Promise<{ status: string; stats: Recor
   for (let i = 0; i < 100; i++) {
     const res = await fetch(`${baseUrl}/api/runs/${runId}`);
     const body = (await res.json()) as { status: string; stats: Record<string, number> | null };
-    if (body.status !== 'running') return body;
+    if (body.status === 'done' || body.status === 'error') return body;
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`run ${runId} did not finish in time`);
@@ -164,11 +164,11 @@ describe('glassray M6 evals (mock)', () => {
     expect(detail.regressionCount).toBe(0);
   });
 
-  it('rejects an eval run while another run holds the shared lock', async () => {
+  it('queues an eval run alongside a concurrent discovery run — both complete, never 409', async () => {
     const created = await fetch(`${baseUrl}/api/evals`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ label: 'Lock probe', rule: 'noop' }),
+      body: JSON.stringify({ label: 'Queue probe', rule: 'noop' }),
     });
     const { id } = (await created.json()) as { id: string };
     const [a, b] = await Promise.all([
@@ -184,10 +184,10 @@ describe('glassray M6 evals (mock)', () => {
       }),
     ]);
     for (const res of [a, b]) {
-      expect([202, 409]).toContain(res.status);
-      const body = (await res.json()) as { runId?: string; error?: string };
-      if (res.status === 202) expect((await waitForRun(body.runId!)).status).toBe('done');
-      else expect(body.error).toMatch(/in progress/);
+      expect(res.status).toBe(202);
+      const body = (await res.json()) as { runId: string; status: string };
+      expect(['queued', 'running']).toContain(body.status);
+      expect((await waitForRun(body.runId)).status).toBe('done');
     }
   });
 

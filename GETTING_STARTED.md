@@ -1,8 +1,9 @@
 # Getting started with Glassray Coach
 
 Coach is a **local** trace debugger for AI agents — one command, one embedded
-database, zero cloud. This is the 3-minute first run. (For the full reference —
-CLI, HTTP surface, env vars — see [`README.md`](./README.md).)
+database, zero cloud. This is the 3-minute first run. (For the full reference:
+CLI + env vars in [`README.md`](./README.md), the HTTP surface in
+[`docs/http-api.md`](./docs/http-api.md).)
 
 ```mermaid
 flowchart LR
@@ -21,7 +22,7 @@ flowchart LR
 ## 1 · Start Coach
 
 ```sh
-npx @glassray/coach
+npx @glassray/coach start
 ```
 
 You'll see the connect block with everything you need:
@@ -41,7 +42,7 @@ and that same key. Leave the server running.
 > port, and that the data directory is writable, with one-line fixes.
 >
 > Working from a clone instead? `npm install && npm run build:ui`, then
-> `node bin/glassray.mjs`.
+> `node bin/glassray.mjs start`.
 
 ---
 
@@ -78,10 +79,13 @@ Back in the browser, the trace appears **instantly** (no refresh). Try this tour
 
 ---
 
-## 4 · Find, fix & lock in problems
+## 4 · Find, fix & lock in problems — the Claude-driven loop
 
 This is the point of Coach — finding the *silent* ways your agent misbehaves,
-then closing the loop on them.
+then closing the loop on them. Run it from the dashboard, the CLI, or — best —
+let Claude Code drive the whole thing.
+
+**From the dashboard:**
 
 1. Go to **Deviations → Run discovery**. Coach's judge reads your traces and
    clusters the recurring failures into deviation types.
@@ -94,13 +98,25 @@ then closing the loop on them.
    that breaks a formerly-passing case is flagged as a **regression**. Once it
    passes, **Mark resolved** on the deviation.
 
+**From your coding agent:** in your agent's repo, run `glassray init` — it installs
+an agent skill (Claude Code, Codex, Copilot) that teaches your coding agent the same loop over the CLI (`glassray
+discovery run`, `deviations get`, `fix`, `evals run`, …). Then just ask:
+
+> "Set up glassray flows and evals for this agent, then run discovery and fix what
+> it finds."
+
+Claude reads your agent's code, scopes its behaviours as durable **flows**, derives
+**evals** from the rules already written into your prompts and guardrails, applies
+the generated fixes itself, and watches the evals go green — evals even **rerun
+automatically** as new traffic accrues in their flow.
+
 > **Discovery needs a model.** With Claude Code installed it uses your local
 > `~/.claude` automatically (zero config). Otherwise it falls back to a
 > deterministic **`mock`** provider — the loop *works*, but the analysis is a
 > placeholder. For real analysis without `~/.claude`, set a key (or pick a
 > provider on the dashboard's **Settings** page):
 > ```sh
-> GLASSRAY_LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-... npx @glassray/coach
+> GLASSRAY_LLM_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-... npx @glassray/coach start
 > ```
 
 ---
@@ -125,7 +141,7 @@ Your key is on the **"Waiting for traces"** screen, or from
 
 | Symptom | Fix |
 | --- | --- |
-| `port 5899 is in use` | Start on another port: `npx @glassray/coach --port 5900`. |
+| `port 5899 is in use` | Start on another port: `npx @glassray/coach start --port 5900`. |
 | Traces don't appear | Check the bearer key matches, and the endpoint is `http://127.0.0.1:5899` (loopback only — remote hosts are refused by design). |
 | "LLM provider not ready" | You're on `mock` or missing a key — see the note in step 4, or open **Settings**. |
 | Something's wedged | `npx @glassray/coach doctor`, or wipe and restart: `npx @glassray/coach reset --yes`. |
@@ -136,7 +152,9 @@ Your key is on the **"Waiting for traces"** screen, or from
 
 - **Full walkthrough** (discover → fix → codify → prove no regression):
   [`examples/support-bot/README.md`](./examples/support-bot/README.md).
-- **CLI, HTTP surface, env vars:** [`README.md`](./README.md).
-- **Use it from your editor:** register the MCP server so Claude Code / Cursor can
-  query your traces and run the whole loop —
-  `claude mcp add glassray -- npx @glassray/coach mcp`.
+- **CLI + env vars:** [`README.md`](./README.md) · **HTTP API:**
+  [`docs/http-api.md`](./docs/http-api.md).
+- **Use it from your editor:** run `glassray init` in your agent's repo — it installs
+  an agent skill (Claude Code, Codex, Copilot) so your coding agent can query your traces, manage flows and evals, and run
+  the whole discover → fix → verify loop through the `glassray` CLI. (Upgrading from
+  0.1? The MCP server is gone — `claude mcp remove glassray`, then `glassray init`.)

@@ -1,7 +1,7 @@
 {
   "name": "@glassray/coach",
-  "version": "0.1.1",
-  "description": "Glassray Coach — a fully self-contained local AI-agent trace viewer (OTLP in, dashboard out).",
+  "version": "0.2.0",
+  "description": "Glassray Coach — a fully self-contained local AI-agent trace debugger (OTLP in, dashboard + agent-first CLI out).",
   "keywords": [
     "ai-agents",
     "glassray",
@@ -12,7 +12,6 @@
     "llm",
     "evals",
     "debugger",
-    "mcp",
     "local"
   ],
   "type": "module",
@@ -39,6 +38,7 @@
     "bin",
     "server",
     "!server/**/*.test.ts",
+    "skills",
     "web/dist",
     "examples",
     "README.md",
@@ -61,7 +61,6 @@
     "@electric-sql/pglite": "0.5.4",
     "@electric-sql/pglite-pgvector": "0.0.5",
     "@fastify/static": "^9.1.3",
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "ai": "^6.0.0",
     "drizzle-orm": "^0.45.2",
     "fastify": "^5.9.0",

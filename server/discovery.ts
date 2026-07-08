@@ -1,9 +1,9 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import type { CoachDb } from './bootstrap.js';
 import { generateStructuredTracked } from './usage.js';
 import { newId } from './ids.js';
-import { deviationExamples, deviations, runs, traces } from './schema.js';
+import { deviationExamples, deviations, flowTraces, runs, traces } from './schema.js';
 import { buildTraceView, type SpanNode, type TraceView } from './vendor/index.js';
 
 /*
@@ -145,13 +145,31 @@ export const renderTraceView = (view: TraceView, id: string): string => {
 // ── run lifecycle helpers (shared with flows.ts) ─────────────────────────────
 
 /** The background pass kinds a run can drive. */
-export type RunKind = 'discovery' | 'flows' | 'eval' | 'improver';
+export type RunKind = 'discovery' | 'flows' | 'eval' | 'improver' | 'classify';
 
-/** Create a `running` run row and return its id — the caller passes this id into the runner. */
-export const createRun = async (db: CoachDb, kind: RunKind): Promise<string> => {
+/** Create a run row (default `running`; the queue creates `queued` rows and claims them later) and return its id. */
+export const createRun = async (
+  db: CoachDb,
+  kind: RunKind,
+  status: 'running' | 'queued' = 'running',
+): Promise<string> => {
   const id = newId('run_');
-  await db.insert(runs).values({ id, kind, status: 'running', startedAt: new Date() });
+  await db.insert(runs).values({ id, kind, status, startedAt: new Date() });
   return id;
+};
+
+/**
+ * Claim a `queued` run as it reaches the front of the FIFO: flip it to
+ * `running` and reset its start time to the actual execution start. Returns
+ * false when the run is no longer queued (i.e. it was canceled while waiting).
+ */
+export const claimQueuedRun = async (db: CoachDb, id: string): Promise<boolean> => {
+  const updated = await db
+    .update(runs)
+    .set({ status: 'running', startedAt: new Date() })
+    .where(and(eq(runs.id, id), eq(runs.status, 'queued')))
+    .returning({ id: runs.id });
+  return updated.length > 0;
 };
 
 /**
@@ -159,19 +177,23 @@ export const createRun = async (db: CoachDb, kind: RunKind): Promise<string> => 
  * `status = 'running'` so a run already finalized as errored (a cancel or the
  * timeout backstop) is NOT resurrected to `done` by a late-completing runner.
  */
-export const finishRun = async (db: CoachDb, id: string, stats: Record<string, number>): Promise<void> => {
+export const finishRun = async (db: CoachDb, id: string, stats: Record<string, number | string>): Promise<void> => {
   await db
     .update(runs)
     .set({ status: 'done', finishedAt: new Date(), stats })
     .where(and(eq(runs.id, id), eq(runs.status, 'running')));
 };
 
-/** Mark a run `error`, stamping its finish time + message. Guarded on `status = 'running'` (first finaliser wins). */
+/**
+ * Mark a run `error`, stamping its finish time + message. Guarded on the run
+ * still being live — `running` (first finaliser wins) or `queued` (a cancel
+ * while waiting in the FIFO).
+ */
 export const failRun = async (db: CoachDb, id: string, error: string): Promise<void> => {
   await db
     .update(runs)
     .set({ status: 'error', finishedAt: new Date(), error })
-    .where(and(eq(runs.id, id), eq(runs.status, 'running')));
+    .where(and(eq(runs.id, id), inArray(runs.status, ['running', 'queued'])));
 };
 
 /** Publish mid-run progress into the (still-running) run's stats blob, so the UI can show "scanned N/M". */
@@ -240,14 +262,23 @@ type Cluster = { id: string; label: string; description: string; rule: string; m
  */
 export const runDiscovery = async (
   db: CoachDb,
-  opts: { sampleSize?: number; runId: string; signal?: AbortSignal },
+  opts: { sampleSize?: number; runId: string; flowId?: string; signal?: AbortSignal },
 ): Promise<{ deviationCount: number; exampleCount: number }> => {
   const sampleSize = Math.max(1, Math.min(opts.sampleSize ?? DEFAULT_SAMPLE_SIZE, 200));
   try {
-    // 1 — sample the newest traces (full raw envelope needed to rebuild the view).
+    // 1 — sample the newest traces (full raw envelope needed to rebuild the
+    //     view), scoped to a flow's members when a flowId is given.
     const rows = await db
       .select({ id: traces.id, raw: traces.raw })
       .from(traces)
+      .where(
+        opts.flowId
+          ? inArray(
+              traces.id,
+              db.select({ id: flowTraces.traceId }).from(flowTraces).where(eq(flowTraces.flowId, opts.flowId)),
+            )
+          : undefined,
+      )
       .orderBy(desc(traces.receivedAt), desc(traces.id))
       .limit(sampleSize);
 

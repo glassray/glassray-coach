@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { RunHandle, RunStatus } from "./api";
-import { cancelRun, fetchRun, RunInProgressError } from "./api";
+import { cancelRun, fetchRun } from "./api";
 
 /** How often to poll GET /api/runs/:id while a background run is in flight. */
 const POLL_INTERVAL_MS = 1500;
@@ -8,13 +8,15 @@ const POLL_INTERVAL_MS = 1500;
 /** What useRun exposes: whether a run is in flight, its terminal error, the last finished run, live progress, and the controls. */
 export interface RunState {
   running: boolean;
+  /** True while the run is still waiting in the server's queue (before it starts executing). */
+  queued: boolean;
   error: string | null;
   /** The most recently completed run (done or error), for success/result feedback. */
   lastRun: RunStatus | null;
   /** The in-flight run's mid-run stats (`{ scanned, total }`) for a progress readout, or null. */
   progress: RunStatus["stats"] | null;
   start: () => void;
-  /** Cancel the in-flight run (frees the lock server-side); a no-op when nothing is running. */
+  /** Cancel the in-flight run (queued or executing); a no-op when nothing is running. */
   cancel: () => void;
 }
 
@@ -23,17 +25,18 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => window.set
 
 /**
  * Start-and-poll helper shared by the discovery/flows/eval runners: `start`
- * POSTs via `trigger`, then polls the returned run every ~1.5s until it reaches
- * done or error, calling `onDone(run)` on success so the view can refetch its
- * list AND read the finished run's stats. If a 409 says a run is already in
- * flight, its id is adopted and polled to completion (so navigating away and
- * back, or double-clicking, re-attaches instead of dead-ending on an error).
+ * POSTs via `trigger` (a 202 returning `{ runId, status }` — the server queues
+ * runs and dedups repeats, handing back the existing run's id), then polls the
+ * run every ~1.5s through `queued` → `running` until it reaches done or error,
+ * calling `onDone(run)` on success so the view can refetch its list AND read
+ * the finished run's stats.
  */
 export const useRun = (
   trigger: () => Promise<RunHandle>,
   onDone: (run: RunStatus) => void,
 ): RunState => {
   const [running, setRunning] = useState(false);
+  const [queued, setQueued] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRun, setLastRun] = useState<RunStatus | null>(null);
   const [progress, setProgress] = useState<RunStatus["stats"] | null>(null);
@@ -50,20 +53,23 @@ export const useRun = (
     };
   }, []);
 
-  /** Poll a known runId to its terminal state, surfacing progress, then settle running/error/lastRun. */
+  /** Poll a known runId to its terminal state, surfacing queue position + progress, then settle running/error/lastRun. */
   const poll = useCallback(async (runId: string) => {
     currentRunId.current = runId;
     for (;;) {
       await sleep(POLL_INTERVAL_MS);
       if (!alive.current) return;
       const run = await fetchRun(runId);
+      if (run.status === "queued") continue;
       if (run.status === "running") {
+        setQueued(false);
         setProgress(run.stats ?? null);
         continue;
       }
       if (!alive.current) return;
       currentRunId.current = null;
       setRunning(false);
+      setQueued(false);
       setProgress(null);
       setLastRun(run);
       // A user-initiated cancel isn't a failure — settle quietly (no error banner).
@@ -84,30 +90,23 @@ export const useRun = (
   const start = useCallback(() => {
     if (running) return;
     setRunning(true);
+    setQueued(false);
     setError(null);
     setProgress(null);
     void (async () => {
       try {
-        const { runId } = await trigger();
+        const { runId, status } = await trigger();
+        if (!alive.current) return;
+        setQueued(status === "queued");
         await poll(runId);
       } catch (err) {
         if (!alive.current) return;
-        // A 409 means another run holds the lock — adopt and poll it rather than
-        // showing a dead-end error, so the view still refreshes when it lands.
-        if (err instanceof RunInProgressError && err.runId) {
-          await poll(err.runId).catch(() => {
-            if (alive.current) {
-              setRunning(false);
-              setError("Run failed.");
-            }
-          });
-          return;
-        }
         setRunning(false);
+        setQueued(false);
         setError(err instanceof Error ? err.message : "Run failed.");
       }
     })();
   }, [running, trigger, poll]);
 
-  return { running, error, lastRun, progress, start, cancel };
+  return { running, queued, error, lastRun, progress, start, cancel };
 };
