@@ -652,7 +652,11 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
   const enqueueClassifySweep = (): Promise<unknown> =>
     enqueueRun('classify', 'classify', async (runId, signal) => {
       await runClassifySweep(db, { runId, signal });
-      await enqueueAutorunEvals().catch(() => {});
+      // Autorun scheduling failures must not fail the (already finished) sweep,
+      // but silence would make a stalled autorun undiagnosable — log them.
+      await enqueueAutorunEvals().catch((err) => {
+        console.error('[glassray] autorun eval scheduling failed:', err instanceof Error ? err.message : err);
+      });
     });
 
   let classifyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -909,7 +913,11 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
       await resetClassificationForBackfill(db);
       scheduleClassifySweep();
     }
-    return getFlowDetail(db, id);
+    // The flow can vanish between the update and this read (e.g. a concurrent
+    // DELETE) — never 200 a null body.
+    const detail = await getFlowDetail(db, id);
+    if (!detail) return reply.code(404).send({ error: 'flow not found' });
+    return detail;
   });
 
   app.delete('/api/flows/:id', async (req, reply) => {

@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { CoachDb } from './bootstrap.js';
 import {
@@ -266,12 +266,18 @@ export const updateFlow = async (db: CoachDb, id: string, patch: FlowPatch): Pro
   return { ok: true, llmDefinitionChanged };
 };
 
-/** Hard-delete a flow: memberships go with it, attached evals detach (become global). Returns false when not found. */
+/**
+ * Hard-delete a flow: memberships go with it, attached evals detach (become
+ * global). Children are removed BEFORE the parent row — PGlite has no FK
+ * constraints here, so a crash mid-way must not leave memberships/eval refs
+ * pointing at a deleted flow. Returns false when not found.
+ */
 export const deleteFlow = async (db: CoachDb, id: string): Promise<boolean> => {
-  const deleted = await db.delete(flows).where(eq(flows.id, id)).returning({ id: flows.id });
-  if (deleted.length === 0) return false;
+  const exists = await db.select({ id: flows.id }).from(flows).where(eq(flows.id, id)).limit(1);
+  if (!exists[0]) return false;
   await db.delete(flowTraces).where(eq(flowTraces.flowId, id));
   await db.update(evals).set({ flowId: null }).where(eq(evals.flowId, id));
+  await db.delete(flows).where(eq(flows.id, id));
   return true;
 };
 
@@ -281,6 +287,7 @@ const memberCounts = async (db: CoachDb, flowIds: string[]): Promise<Map<string,
   const rows = await db
     .select({ flowId: flowTraces.flowId, n: sql<number>`count(*)::int` })
     .from(flowTraces)
+    .where(inArray(flowTraces.flowId, flowIds))
     .groupBy(flowTraces.flowId);
   return new Map(rows.map((r) => [r.flowId, r.n]));
 };
