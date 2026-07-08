@@ -974,7 +974,10 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     }
     const updated = await updateEval(db, id, parsed.data);
     if (!updated) return reply.code(404).send({ error: 'eval not found' });
-    return getEvalDetail(db, id);
+    // The eval can vanish between the update and this read — never 200 a null body.
+    const detail = await getEvalDetail(db, id);
+    if (!detail) return reply.code(404).send({ error: 'eval not found' });
+    return detail;
   });
 
   app.get('/api/evals', async () => {
