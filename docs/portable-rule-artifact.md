@@ -30,6 +30,23 @@ is the Supabase model — you author migrations locally and `db push` them to
 cloud. Here you author **rules** locally and push them to cloud, where they run
 against production traffic.
 
+```mermaid
+flowchart LR
+  subgraph L["Coach — local · author + verify"]
+    direction TB
+    a1["author rules"] --> a2["compare A/B<br/>on fixtures"] --> a3["check in CI"]
+  end
+  art{{"glassray.yaml<br/>versioned rule artifact"}}
+  subgraph C["Glassray — cloud · discover + monitor"]
+    direction TB
+    c1["run rules on<br/>live traffic"] --> c2["discover new<br/>failure modes"]
+  end
+  L -->|push| art
+  art -->|"push --target cloud"| C
+  C -->|"pull · promote deviation"| art
+  art -->|pull| L
+```
+
 ## 2. One primitive, not two (the model change)
 
 Coach already stores the same mechanism in two tables:
@@ -53,6 +70,31 @@ So: **an eval is a watched assertion-rule.** A deviation is a *failing test you
 haven't written yet*; `evals.source='deviation'` + `sourceDeviationId` is
 already the "promote deviation → rule" seam — it just isn't framed as a
 lifecycle.
+
+```mermaid
+flowchart TD
+  p["judged predicate<br/>plain language · LLM verdict over a trace"]
+  p --> m["membership<br/>defines the corpus<br/>flows.selector / flows.rule"]
+  p --> a["assertion<br/>scores the corpus<br/>evals · watched"]
+  p --> v["violation<br/>transient evidence<br/>deviations"]
+  v -.->|promote| a
+```
+
+The role split has a lifecycle — the same one the flow-page redesign already
+draws for rules:
+
+```mermaid
+stateDiagram-v2
+  [*] --> proposed
+  proposed --> watched: enforce · gates CI + autorun
+  proposed --> archived: dismiss
+  watched --> archived: mute
+  archived --> watched: re-enable
+  note right of watched
+    a watched assertion-rule IS an eval
+    eval_results are its scores
+  end note
+```
 
 **Change:** replace the eval `autorun` boolean with a rule
 `state: proposed | watched | archived` (watched ⇒ the old `autorun=true`).
@@ -212,6 +254,14 @@ The round-trip that proves the strategy: a rule authored in Coach → `push` to
 cloud → runs unchanged on production traffic → a deviation cloud discovers there
 → `pull`s back as a `proposed` rule you can `watch`. Discovery (cloud) proposes;
 the file makes the durable state portable; `check` (local/CI) enforces.
+
+```mermaid
+flowchart LR
+  A["author rule<br/>in Coach"] -->|"push --target cloud"| P["runs on<br/>production traffic"]
+  P --> D["deviation<br/>new failure mode"]
+  D -->|"pull as proposed rule"| A
+  A -->|"watch + check"| G["CI gate<br/>catches it forever"]
+```
 
 ## 9. Sequenced issues
 
