@@ -2434,32 +2434,30 @@ a {
   width: 9rem;
 }
 
-/* ---------- Rule lifecycle state chips (proposed | watched | archived) ---------- */
+/* ---------- Rule source chips (file-linked | custom) ---------- */
 
-.state-chip {
-  display: inline-block;
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
   padding: 0.15rem 0.5rem;
   font-size: 0.72rem;
   font-weight: 500;
   border-radius: 999px;
   white-space: nowrap;
-  border: 1px solid transparent;
-  text-transform: lowercase;
-}
-.state-proposed {
-  color: var(--kind-tool);
-  background: color-mix(in srgb, var(--warning) 12%, var(--card));
-  border-color: color-mix(in srgb, var(--warning) 35%, transparent);
-}
-.state-watched {
-  color: var(--brand);
-  background: color-mix(in srgb, var(--brand) 10%, var(--card));
-  border-color: color-mix(in srgb, var(--brand) 35%, transparent);
-}
-.state-archived {
-  color: var(--muted-foreground);
+  border: 1px solid var(--border);
   background: var(--muted);
-  border-color: var(--border);
+  color: var(--muted-foreground);
+}
+/* The linked file path, in brand green so the provenance reads at a glance. */
+.source-chip-file {
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  color: var(--brand);
+}
+/* A hand-written rule tied to no file. */
+.source-chip-custom {
+  font-style: italic;
 }
 
 /* ---------- Compare view ---------- */

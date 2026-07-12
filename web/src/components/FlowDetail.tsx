@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FlowAudit, FlowClassify, FlowDetail as FlowDetailData, FlowMember } from "../api";
 import { deleteFlow, fetchFlow, fetchFlowAudit, isNotFoundError, updateFlow } from "../api";
 import { formatNumber, relativeTime, truncate } from "../format";
-import { StateChip } from "./Evals";
+import { SourceChip } from "./Evals";
 import type { SelectorFields } from "./Flows";
 import { ClassifyChip, describeSelector, fieldsToSelector, SelectorFieldsGrid, selectorToFields } from "./Flows";
 
@@ -343,7 +343,7 @@ export const FlowDetail = ({ id }: { id: string }) => {
 
       {/* The flow's rules, both layers together: the membership rule above
           (definition card) picks the denominator; these assertion rules score
-          the numerator. A `proposed` rule observes; `watched` gates. */}
+          the numerator. Every rule is active — each is file-linked or custom. */}
       <h2 className="section-title">Rules ({data.evals.length})</h2>
       {data.evals.length === 0 ? (
         <div className="notice">
@@ -351,7 +351,7 @@ export const FlowDetail = ({ id }: { id: string }) => {
           <a className="inline-link" href="#/deviations">
             deviation
           </a>{" "}
-          as a proposed rule, or write one from the{" "}
+          as a rule, or write one from the{" "}
           <a className="inline-link" href="#/evals">
             Rules
           </a>{" "}
@@ -363,7 +363,7 @@ export const FlowDetail = ({ id }: { id: string }) => {
             <li key={ev.id}>
               <a className="mini-row" href={`#/eval/${encodeURIComponent(ev.id)}`}>
                 <span className="mini-name">{ev.label}</span>
-                <StateChip state={ev.state} />
+                <SourceChip sourceFile={ev.sourceFile} />
                 {ev.threshold !== null ? (
                   <span className="tag" title="`glassray check` gate — fails below this pass rate">
                     gate ≥{Math.round(ev.threshold * 100)}%

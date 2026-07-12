@@ -132,9 +132,11 @@ export const flowTraces = pgTable(
 /**
  * An assertion RULE over a flow's traces — a repeatable pass/fail check built
  * from a plain-language `rule` (saved from a deviation, or hand-written).
- * Historically "evals"; the table name stays for datadir compatibility. A rule
- * has a lifecycle `state`: `proposed` (observed, not gating), `watched`
- * (autoruns + gates `glassray check`), or `archived`.
+ * Historically "evals"; the table name stays for datadir compatibility. Every
+ * rule is active — it gates `check` and runs in `compare`. Provenance is
+ * `sourceFile`: the repo path the expectation is written in (null = custom,
+ * hand-written and not tied to a file). Acceptance is git review of
+ * `glassray.yaml`, not an in-app promote.
  */
 export const evals = pgTable('evals', {
   /** Prefixed random-hex id (`eval_…`). */
@@ -149,8 +151,10 @@ export const evals = pgTable('evals', {
   sourceDeviationId: text('source_deviation_id'),
   /** The flow this eval is scoped to (runs sample that flow's members); null = global (newest traces store-wide). */
   flowId: text('flow_id'),
-  /** Lifecycle: `proposed` (not gating) | `watched` (autoruns + gates check) | `archived`. */
-  state: text('state').notNull().default('watched'),
+  /** The repo path the expectation is written in (e.g. `watcher/digest.ts`); null = custom (hand-written). */
+  sourceFile: text('source_file'),
+  /** VESTIGIAL: the retired lifecycle column, kept to avoid a destructive migration. Set to a constant on insert; never read for gating. */
+  state: text('state').notNull().default('active'),
   /** How many new member traces (since the last run) trigger an automatic rerun of a watched rule. */
   autorunThreshold: integer('autorun_threshold').notNull().default(10),
   /** Pass-rate gate for `glassray check` (0..1); null = 1.0 (any failure breaches). */

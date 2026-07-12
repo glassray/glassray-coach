@@ -1,23 +1,23 @@
 import { useCallback, useEffect, useState } from "react";
-import type { EvalSummary, FlowSummary, RuleState } from "../api";
+import type { EvalSummary, FlowSummary } from "../api";
 import { createEval, fetchEvals, fetchFlows } from "../api";
 import { formatNumber, relativeTime } from "../format";
 
-/** Lifecycle chip for a rule: proposed (observing) / watched (gating) / archived. */
-export const StateChip = ({ state }: { state: RuleState }) => (
-  <span
-    className={`state-chip state-${state}`}
-    title={
-      state === "watched"
-        ? "Watched — autoruns on new traffic and gates `glassray check`"
-        : state === "proposed"
-          ? "Proposed — observed, not yet gating"
-          : "Archived — retired from runs and checks"
-    }
-  >
-    {state}
-  </span>
-);
+/**
+ * Provenance chip for a rule: the repo path its expectation is written in
+ * (`from watcher/digest.ts`) when linked, else a muted `custom` tag. Every rule
+ * is active — this replaces the retired proposed/watched/archived lifecycle.
+ */
+export const SourceChip = ({ sourceFile }: { sourceFile: string | null }) =>
+  sourceFile ? (
+    <span className="source-chip" title={`Derived from ${sourceFile} — approve by reviewing glassray.yaml`}>
+      from <span className="source-chip-file">{sourceFile}</span>
+    </span>
+  ) : (
+    <span className="source-chip source-chip-custom" title="Custom — hand-written, not tied to a file">
+      custom
+    </span>
+  );
 
 /** A compact pass/fail proportion bar for one eval's latest run (empty when never run). */
 const ResultBar = ({ passed, failed }: { passed: number; failed: number }) => {
@@ -58,17 +58,16 @@ export const FlowChip = ({ flowId, flowName }: { flowId: string | null; flowName
   );
 };
 
-/** Inline "new rule" form — a hand-written label + rule (+ optional description / flow scope / state). */
+/** Inline "new rule" form — a hand-written (custom) label + rule (+ optional description / flow scope). */
 const NewEvalForm = ({ flows, onCreated }: { flows: FlowSummary[]; onCreated: () => void }) => {
   const [label, setLabel] = useState("");
   const [rule, setRule] = useState("");
   const [description, setDescription] = useState("");
   const [flowId, setFlowId] = useState("");
-  const [state, setState] = useState<RuleState>("watched");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /** Submit the form: create the eval, reset, and let the parent refresh. */
+  /** Submit the form: create the (custom) eval, reset, and let the parent refresh. */
   const submit = useCallback(
     async (event: React.FormEvent) => {
       event.preventDefault();
@@ -81,13 +80,11 @@ const NewEvalForm = ({ flows, onCreated }: { flows: FlowSummary[]; onCreated: ()
           rule: rule.trim(),
           description: description.trim() || undefined,
           flowId: flowId || undefined,
-          state,
         });
         setLabel("");
         setRule("");
         setDescription("");
         setFlowId("");
-        setState("watched");
         onCreated();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not create eval.");
@@ -95,7 +92,7 @@ const NewEvalForm = ({ flows, onCreated }: { flows: FlowSummary[]; onCreated: ()
         setBusy(false);
       }
     },
-    [label, rule, description, flowId, state, busy, onCreated],
+    [label, rule, description, flowId, busy, onCreated],
   );
 
   return (
@@ -156,20 +153,6 @@ const NewEvalForm = ({ flows, onCreated }: { flows: FlowSummary[]; onCreated: ()
           </select>
         </div>
       ) : null}
-      <div className="new-eval-field">
-        <label className="new-eval-label" htmlFor="eval-state">
-          State <span className="muted">(watched rules autorun + gate `glassray check`)</span>
-        </label>
-        <select
-          id="eval-state"
-          className="new-eval-input"
-          value={state}
-          onChange={(e) => setState(e.target.value as RuleState)}
-        >
-          <option value="watched">watched — enforce it</option>
-          <option value="proposed">proposed — observe first</option>
-        </select>
-      </div>
       {error ? <p className="runbar-error">{error}</p> : null}
       <div className="new-eval-actions">
         <button className="btn" type="submit" disabled={busy || !label.trim() || !rule.trim()}>
@@ -230,7 +213,7 @@ export const Evals = () => {
           <a className="inline-link" href="#/deviations">
             deviation
           </a>{" "}
-          and “Save as rule”, or write one by hand. Watched rules autorun and gate{" "}
+          and “Save as rule”, or write one by hand. Every rule autoruns and gates{" "}
           <span className="mono">glassray check</span>.
         </p>
         <div className="empty-actions">{newButton}</div>
@@ -244,7 +227,7 @@ export const Evals = () => {
         <div className="page-head-text">
           <h1 className="page-title">Rules</h1>
           <p className="page-sub">
-            Assertion rules re-checked against new traces — proposed rules observe, watched rules gate.
+            Assertion rules re-checked against new traces — every rule is active; each is linked to a file or custom.
           </p>
         </div>
         {newButton}
@@ -260,7 +243,7 @@ export const Evals = () => {
             <thead>
               <tr>
                 <th>Rule</th>
-                <th>State</th>
+                <th>Source</th>
                 <th>Flow</th>
                 <th className="col-bar">Latest result</th>
                 <th className="col-num">Passing</th>
@@ -284,11 +267,11 @@ export const Evals = () => {
                     <div className="cell-preview">{ev.rule}</div>
                   </td>
                   <td>
-                    <StateChip state={ev.state} />
+                    <SourceChip sourceFile={ev.sourceFile} />
                   </td>
                   <td>
                     <FlowChip flowId={ev.flowId} flowName={flows.find((f) => f.id === ev.flowId)?.name} />
-                    {ev.flowId && ev.state === "watched" ? (
+                    {ev.flowId ? (
                       <div className="cell-preview" title={`Reruns after ${ev.autorunThreshold} new member traces`}>
                         autorun ≥{formatNumber(ev.autorunThreshold)}
                       </div>

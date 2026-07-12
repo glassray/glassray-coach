@@ -341,8 +341,8 @@ export type FlowRuleRef = {
   id: string;
   label: string;
   rule: string;
-  /** Lifecycle: `proposed` | `watched` | `archived`. */
-  state: string;
+  /** The repo path this rule's expectation is written in; null = custom (hand-written). */
+  sourceFile: string | null;
   /** Provenance: `deviation` or `manual`. */
   source: string;
   /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
@@ -380,7 +380,7 @@ export const getFlowDetail = async (
         id: evals.id,
         label: evals.label,
         rule: evals.rule,
-        state: evals.state,
+        sourceFile: evals.sourceFile,
         source: evals.source,
         threshold: evals.threshold,
         lastRunAt: evals.lastRunAt,

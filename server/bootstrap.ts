@@ -120,7 +120,8 @@ CREATE TABLE IF NOT EXISTS evals (
   source text NOT NULL,
   source_deviation_id text,
   flow_id text,
-  state text NOT NULL DEFAULT 'watched',
+  source_file text,
+  state text NOT NULL DEFAULT 'active',
   autorun_threshold integer NOT NULL DEFAULT 10,
   threshold double precision,
   judge_model text,
@@ -208,6 +209,11 @@ DO $$ BEGIN
     END IF;
   END IF;
 END $$;
+-- Rules-by-source (retire the proposed/watched/archived lifecycle): a rule now
+-- carries WHERE it came from (a repo path, null = custom) instead of a state.
+-- The legacy state column is left in place (vestigial — never read for
+-- gating) to avoid a destructive migration.
+ALTER TABLE evals ADD COLUMN IF NOT EXISTS source_file text;
 -- Portable-rule-artifact columns (idempotent on their own).
 ALTER TABLE evals ADD COLUMN IF NOT EXISTS threshold double precision;
 ALTER TABLE evals ADD COLUMN IF NOT EXISTS judge_model text;

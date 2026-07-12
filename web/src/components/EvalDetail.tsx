@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { EvalDetail as EvalDetailData, FlowSummary, RuleState, RunStatus } from "../api";
+import type { EvalDetail as EvalDetailData, FlowSummary, RunStatus } from "../api";
 import { deleteEval, fetchEval, fetchFlows, fetchRun, isNotFoundError, runEval, updateEval } from "../api";
 import { plural, readStat, relativeTime, truncate } from "../format";
 import { useRun } from "../useRun";
 import { PassRateTrend } from "./charts";
-import { FlowChip, StateChip } from "./Evals";
+import { FlowChip, SourceChip } from "./Evals";
 import { RunBar } from "./RunBar";
 
 /** A pass/fail verdict pill for one scored trace. */
@@ -75,11 +75,11 @@ export const EvalDetail = ({ id }: { id: string }) => {
   /** Serializes PATCHes so an interaction during an in-flight save queues behind it instead of being dropped. */
   const patchChain = useRef<Promise<void>>(Promise.resolve());
 
-  /** PATCH one scope/state/gate change (queued behind any in-flight save) and adopt the refreshed detail. */
+  /** PATCH one scope/source/gate change (queued behind any in-flight save) and adopt the refreshed detail. */
   const applyPatch = useCallback(
     (patch: {
       flowId?: string | null;
-      state?: RuleState;
+      sourceFile?: string | null;
       autorunThreshold?: number;
       threshold?: number | null;
     }): Promise<void> => {
@@ -193,7 +193,7 @@ export const EvalDetail = ({ id }: { id: string }) => {
           ) : (
             <span className={`eval-source eval-source-${data.source}`}>{data.source}</span>
           )}
-          <StateChip state={data.state} />
+          <SourceChip sourceFile={data.sourceFile} />
           {data.flowId ? (
             <FlowChip flowId={data.flowId} flowName={flows.find((f) => f.id === data.flowId)?.name} />
           ) : null}
@@ -227,22 +227,6 @@ export const EvalDetail = ({ id }: { id: string }) => {
                       {f.status === "archived" ? " (archived)" : ""}
                     </option>
                   ))}
-              </select>
-            </div>
-            <div className="new-eval-field">
-              <label className="new-eval-label" htmlFor="ed-state" title="Watched rules autorun on new traffic and gate `glassray check`">
-                State
-              </label>
-              <select
-                id="ed-state"
-                className="new-eval-input"
-                value={data.state}
-                disabled={patchBusy}
-                onChange={(e) => void applyPatch({ state: e.target.value as RuleState })}
-              >
-                <option value="proposed">proposed — observe only</option>
-                <option value="watched">watched — autorun + gate check</option>
-                <option value="archived">archived — retired</option>
               </select>
             </div>
             <div className="new-eval-field">
@@ -282,8 +266,6 @@ export const EvalDetail = ({ id }: { id: string }) => {
           </div>
           {!data.flowId ? (
             <p className="muted">Autorun needs a flow scope — bind this rule to a flow to rerun it hands-free.</p>
-          ) : data.state !== "watched" ? (
-            <p className="muted">Only watched rules autorun and gate `glassray check` — this rule is {data.state}.</p>
           ) : null}
           {patchError ? <p className="runbar-error">{patchError}</p> : null}
         </div>

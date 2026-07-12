@@ -36,7 +36,7 @@ const USAGE = {
   flows:
     "glassray flows list [--status active|archived|all] | get <id> | create --name <s> [--description <s>] [--rule <s>] [--classify selector|llm] [--selector '<json>'] [--created-by user|claude] | update <id> [--name <s>] [--description <s>] [--rule <s>|--no-rule] [--classify selector|llm] [--selector '<json>'|--no-selector] [--status active|archived] | delete <id> | audit <id> | discover [--no-wait] [--timeout <s>]",
   evals:
-    'glassray evals list | get <id> | create (--deviation <id> [--flow <id>]) or (--label <s> --rule <s> [--description <s>] [--flow <id>] [--state proposed|watched|archived] [--threshold <0..1>] [--judge <model>] [--autorun-threshold <n>]) | update <id> [--flow <id>|--no-flow] [--state <s>] [--threshold <0..1>|--no-threshold] [--judge <model>|--no-judge] [--autorun-threshold <n>] | run <id> [--sample <n>] [--model <s>] [--no-wait] [--timeout <s>] | delete <id>',
+    'glassray evals list | get <id> | create (--deviation <id> [--flow <id>]) or (--label <s> --rule <s> [--description <s>] [--flow <id>] [--source-file <path>] [--threshold <0..1>] [--judge <model>] [--autorun-threshold <n>]) | update <id> [--flow <id>|--no-flow] [--source-file <path>|--no-source-file] [--threshold <0..1>|--no-threshold] [--judge <model>|--no-judge] [--autorun-threshold <n>] | run <id> [--sample <n>] [--model <s>] [--no-wait] [--timeout <s>] | delete <id>',
   deviations: 'glassray deviations list | get <id> | resolve <id> [--reopen]',
   discovery: 'glassray discovery run [--sample <n>] [--flow <id>] [--no-wait] [--timeout <s>]',
   fix: 'glassray fix <deviationId> [--no-wait] [--timeout <s>]',
@@ -473,7 +473,7 @@ export const cmdEvals = async ({ port, args }) => {
         label: { type: 'string' },
         rule: { type: 'string' },
         description: { type: 'string' },
-        state: { type: 'string' },
+        'source-file': { type: 'string' },
         threshold: { type: 'string' },
         judge: { type: 'string' },
         'autorun-threshold': { type: 'string' },
@@ -484,12 +484,12 @@ export const cmdEvals = async ({ port, args }) => {
           values.label !== undefined ||
           values.rule !== undefined ||
           values.description !== undefined ||
-          values.state !== undefined ||
+          values['source-file'] !== undefined ||
           values.threshold !== undefined ||
           values.judge !== undefined ||
           values['autorun-threshold'] !== undefined
         ) {
-          usageFail('evals', '--deviation only combines with --flow (the deviation supplies the label/rule; it lands as a proposed rule)');
+          usageFail('evals', '--deviation only combines with --flow (the deviation supplies the label/rule; it lands as a custom rule)');
         }
         body = { deviationId: values.deviation };
       } else {
@@ -498,7 +498,7 @@ export const cmdEvals = async ({ port, args }) => {
         }
         body = { label: values.label, rule: values.rule };
         if (values.description !== undefined) body.description = values.description;
-        if (values.state !== undefined) body.state = values.state;
+        if (values['source-file'] !== undefined) body.sourceFile = values['source-file'];
         if (values.threshold !== undefined) body.threshold = toRate('evals', 'threshold', values.threshold);
         if (values.judge !== undefined) body.judgeModel = values.judge;
         if (values['autorun-threshold'] !== undefined) {
@@ -512,7 +512,8 @@ export const cmdEvals = async ({ port, args }) => {
       const { values, positionals } = parseFlags('evals', args.slice(1), {
         flow: { type: 'string' },
         'no-flow': { type: 'boolean', default: false },
-        state: { type: 'string' },
+        'source-file': { type: 'string' },
+        'no-source-file': { type: 'boolean', default: false },
         threshold: { type: 'string' },
         'no-threshold': { type: 'boolean', default: false },
         judge: { type: 'string' },
@@ -521,6 +522,9 @@ export const cmdEvals = async ({ port, args }) => {
       });
       const id = requireId('evals', positionals);
       if (values.flow !== undefined && values['no-flow']) usageFail('evals', 'pass either --flow or --no-flow, not both');
+      if (values['source-file'] !== undefined && values['no-source-file']) {
+        usageFail('evals', 'pass either --source-file or --no-source-file, not both');
+      }
       if (values.threshold !== undefined && values['no-threshold']) {
         usageFail('evals', 'pass either --threshold or --no-threshold, not both');
       }
@@ -528,7 +532,8 @@ export const cmdEvals = async ({ port, args }) => {
       const body = {};
       if (values.flow !== undefined) body.flowId = values.flow;
       if (values['no-flow']) body.flowId = null;
-      if (values.state !== undefined) body.state = values.state;
+      if (values['source-file'] !== undefined) body.sourceFile = values['source-file'];
+      if (values['no-source-file']) body.sourceFile = null;
       if (values.threshold !== undefined) body.threshold = toRate('evals', 'threshold', values.threshold);
       if (values['no-threshold']) body.threshold = null;
       if (values.judge !== undefined) body.judgeModel = values.judge;
@@ -1025,9 +1030,10 @@ export const cmdPush = async ({ port, args }) => {
 
 /**
  * `glassray check [--fixtures] [--dir <dir>] [--sample <n>] [--timeout <s>]` —
- * run every WATCHED rule and exit non-zero on any pass-rate below its
- * threshold (default 1.0). With --fixtures the corpus is the committed golden
- * set (hermetic, deterministic — the CI gate); without, the flow's live members.
+ * run every rule and exit non-zero on any pass-rate below its threshold
+ * (default 1.0). Every rule is active — there is no lifecycle gate. With
+ * --fixtures the corpus is the committed golden set (hermetic, deterministic —
+ * the CI gate); without, the flow's live members.
  */
 export const cmdCheck = async ({ port, args }) => {
   const { values } = parseFlags('check', args, {
@@ -1040,9 +1046,9 @@ export const cmdCheck = async ({ port, args }) => {
   const sampleSize = values.sample !== undefined ? toInt('check', 'sample', values.sample, 1) : undefined;
 
   const evalList = await api(port, '/api/evals');
-  const watched = evalList.items.filter((e) => e.state === 'watched');
-  if (watched.length === 0) {
-    return fail("no watched rules to check — flip a rule to 'watched' (glassray evals update <id> --state watched)");
+  const suite = evalList.items;
+  if (suite.length === 0) {
+    return fail('no rules to check — add a rule first (glassray evals create --label <s> --rule <s>)');
   }
 
   // Fixtures mode: re-ingest the committed set, then pin each rule's corpus to it.
@@ -1062,7 +1068,7 @@ export const cmdCheck = async ({ port, args }) => {
 
   const results = [];
   let breaches = 0;
-  for (const rule of watched) {
+  for (const rule of suite) {
     const body = {};
     if (sampleSize !== undefined) body.sampleSize = sampleSize;
     if (fixtureIds !== null) {
@@ -1162,8 +1168,8 @@ const printCompareSummary = (stats) => {
 
 /**
  * `glassray compare [<flow>] <baseline> <candidate> [--sample <n>]` — the A/B
- * over the watched rule suite. Three positionals scope the suite to one flow
- * (by slug, id, or name); two run every watched rule. Bare corpora are run
+ * over the rule suite. Three positionals scope the suite to one flow
+ * (by slug, id, or name); two run every global rule. Bare corpora are run
  * labels — the canonical model-swap invocation is
  * `glassray compare digest baseline haiku`.
  */

@@ -12,7 +12,7 @@ import { fetchEvals, fetchFlows, fetchInfo, fetchLastCompare, fetchStats, fetchT
 import { formatNumber, relativeTime, truncate } from "../format";
 import { useTailRefresh } from "../useTailRefresh";
 import { parseCompareReport } from "./Compare";
-import { HealthBadge, StateChip } from "./Evals";
+import { HealthBadge, SourceChip } from "./Evals";
 import { EmptyState, StatusDot } from "./TraceList";
 import { UsageCard } from "./UsageCard";
 
@@ -136,18 +136,15 @@ export const Overview = () => {
               ) : null}
             </div>
             <ul className="mini-list">
-              {evals
-                .filter((e) => e.state !== "archived")
-                .slice(0, 8)
-                .map((e) => (
-                  <li key={e.id}>
-                    <a className="mini-row" href={`#/eval/${encodeURIComponent(e.id)}`}>
-                      <span className="mini-name">{e.label}</span>
-                      <StateChip state={e.state} />
-                      <HealthBadge ev={e} />
-                    </a>
-                  </li>
-                ))}
+              {evals.slice(0, 8).map((e) => (
+                <li key={e.id}>
+                  <a className="mini-row" href={`#/eval/${encodeURIComponent(e.id)}`}>
+                    <span className="mini-name">{e.label}</span>
+                    <SourceChip sourceFile={e.sourceFile} />
+                    <HealthBadge ev={e} />
+                  </a>
+                </li>
+              ))}
             </ul>
           </>
         )}

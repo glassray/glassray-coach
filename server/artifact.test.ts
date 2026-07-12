@@ -107,10 +107,10 @@ beforeAll(async () => {
   ).id;
   await post(
     '/api/evals',
-    { label: 'English summary', rule: 'PASS if plain English.', flowId, state: 'watched', threshold: 0.95, judgeModel: 'judge-x' },
+    { label: 'English summary', rule: 'PASS if plain English.', flowId, sourceFile: 'src/digest.ts', threshold: 0.95, judgeModel: 'judge-x' },
     201,
   );
-  await post('/api/evals', { label: 'Topic sensible', rule: 'PASS if topic sensible.', flowId, state: 'proposed' }, 201);
+  await post('/api/evals', { label: 'Topic sensible', rule: 'PASS if topic sensible.', flowId }, 201);
 }, 120_000);
 
 afterAll(async () => {
@@ -119,7 +119,7 @@ afterAll(async () => {
 });
 
 describe('artifact export', () => {
-  it('serializes flows + rules with stable slugs, states, judges, and thresholds', async () => {
+  it('serializes flows + rules with stable slugs, source files, judges, and thresholds', async () => {
     const { artifact, yaml } = await get('/api/export');
     expect(artifact.version).toBe(1);
     expect(artifact.flows).toHaveLength(1);
@@ -131,12 +131,13 @@ describe('artifact export', () => {
     const bySlug = new Map(artifact.rules.map((r: any) => [r.id, r]));
     expect(bySlug.get('english-summary')).toMatchObject({
       flow: 'trace-digest',
-      state: 'watched',
+      source: 'src/digest.ts',
       judge: 'judge-x',
       threshold: 0.95,
       predicate: 'PASS if plain English.',
     });
-    expect(bySlug.get('topic-sensible')).toMatchObject({ state: 'proposed' });
+    // A custom (hand-written) rule carries no source.
+    expect((bySlug.get('topic-sensible') as any).source).toBeUndefined();
     expect(yaml).toContain('id: english-summary');
 
     // Export stamped the derived slugs back onto the rows (durable identity).
@@ -153,17 +154,17 @@ describe('artifact import (push)', () => {
     expect(plan.summary).toMatchObject({ create: 0, update: 0, prune: 0 });
   });
 
-  it('plans and applies create / update / state transitions, then converges to noop', async () => {
+  it('plans and applies create / update / source changes, then converges to noop', async () => {
     const { artifact } = await get('/api/export');
     const english = artifact.rules.find((r: any) => r.id === 'english-summary');
     const topic = artifact.rules.find((r: any) => r.id === 'topic-sensible');
     english.threshold = 1;
-    topic.state = 'watched'; // proposed → watched in the file IS the gating flip
+    topic.source = 'src/topic.ts'; // custom → file-linked is an ordinary update
     artifact.rules.push({
       id: 'language-correct',
       flow: 'trace-digest',
       predicate: 'PASS if the language code is right.',
-      state: 'watched',
+      source: 'src/digest.ts',
     });
 
     const plan = await post('/api/import', { artifact, apply: false });
@@ -176,15 +177,15 @@ describe('artifact import (push)', () => {
     const evalsList = await get('/api/evals');
     const byLabel = new Map<string, any>(evalsList.items.map((e: any) => [e.slug, e]));
     expect(byLabel.get('english-summary').threshold).toBe(1);
-    expect(byLabel.get('topic-sensible').state).toBe('watched');
-    expect(byLabel.get('language-correct')).toMatchObject({ state: 'watched', flowId });
+    expect(byLabel.get('topic-sensible').sourceFile).toBe('src/topic.ts');
+    expect(byLabel.get('language-correct')).toMatchObject({ sourceFile: 'src/digest.ts', flowId });
 
     // Idempotent: a second apply of the same file is all-noop.
     const replan = await post('/api/import', { artifact, apply: false });
     expect(replan.summary).toMatchObject({ create: 0, update: 0, prune: 0 });
   });
 
-  it('never deletes on prune — unmentioned rules archive only under prune:true', async () => {
+  it('prune deletes unmentioned rules only under prune:true', async () => {
     const { artifact } = await get('/api/export');
     artifact.rules = artifact.rules.filter((r: any) => r.id !== 'topic-sensible');
 
@@ -192,12 +193,12 @@ describe('artifact import (push)', () => {
     const noPrune = await post('/api/import', { artifact, apply: true });
     expect(noPrune.skippedPrunes).toBe(1);
     let items = (await get('/api/evals')).items;
-    expect(items.find((e: any) => e.slug === 'topic-sensible').state).toBe('watched');
+    expect(items.find((e: any) => e.slug === 'topic-sensible')).toBeDefined();
 
-    // With prune: archived, not deleted — and no longer a prune candidate after.
+    // With prune: the rule is DELETED (no archived state) — and no longer a prune candidate after.
     await post('/api/import', { artifact, apply: true, prune: true });
     items = (await get('/api/evals')).items;
-    expect(items.find((e: any) => e.slug === 'topic-sensible').state).toBe('archived');
+    expect(items.find((e: any) => e.slug === 'topic-sensible')).toBeUndefined();
     const replan = await post('/api/import', { artifact, apply: false });
     expect(replan.summary.prune).toBe(0);
   });
@@ -220,7 +221,7 @@ describe('artifact import (push)', () => {
         },
       ],
       rules: [
-        { id: 'new-rule', flow: 'new-flow', predicate: 'PASS always.', state: 'proposed' },
+        { id: 'new-rule', flow: 'new-flow', predicate: 'PASS always.', source: 'src/new.ts' },
       ],
     };
     const applied = await post('/api/import', { artifact: file, apply: true });
@@ -312,7 +313,7 @@ describe('compare', () => {
     expect(run.status).toBe('done');
     expect(run.kind).toBe('compare');
     const report = run.stats;
-    // The flow's watched rules only (topic-sensible was archived above).
+    // The flow's rules (topic-sensible was pruned/deleted above; english-summary remains).
     expect(report.rules.length).toBeGreaterThanOrEqual(1);
     for (const rule of report.rules) {
       // The mock judge always passes — both sides are 2/2.
@@ -326,7 +327,7 @@ describe('compare', () => {
     expect(report.regressions).toBe(0);
   });
 
-  it('rejects a compare with no watched rules in scope', async () => {
+  it('rejects a compare with no rules in scope', async () => {
     const empty = (await post('/api/flows', { name: 'Empty scope', selector: { agent: 'nobody' } }, 201)).id;
     const accepted = await post(
       '/api/compare',
@@ -335,18 +336,18 @@ describe('compare', () => {
     );
     const run = await waitForRun(accepted.runId);
     expect(run.status).toBe('error');
-    expect(run.error).toContain('no watched rules');
+    expect(run.error).toContain('no rules to compare');
   });
 });
 
-describe('rule lifecycle', () => {
-  it('a deviation saved as a rule lands in the proposed state', async () => {
+describe('rule source', () => {
+  it('a deviation saved as a rule lands custom (no source file), active', async () => {
     const disc = await post('/api/discovery/run', {}, 202);
     expect((await waitForRun(disc.runId)).status).toBe('done');
     const deviation = (await get('/api/deviations')).items[0];
     const { id } = await post('/api/evals', { deviationId: deviation.id }, 201);
     const detail = await get(`/api/evals/${id}`);
-    expect(detail.state).toBe('proposed');
+    expect(detail.sourceFile).toBeNull();
     expect(detail.source).toBe('deviation');
   });
 });

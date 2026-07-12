@@ -119,13 +119,11 @@ const discoveryBodySchema = z.object({
   flowId: z.string().trim().min(1).max(100).optional(),
 });
 
-/** A rule's lifecycle state (see docs/portable-rule-artifact.md §2): watched rules autorun + gate `check`. */
-const ruleStateSchema = z.enum(['proposed', 'watched', 'archived']);
-
 /**
  * Body contract for POST /api/evals — either "save from a deviation"
- * (`{ deviationId }` — lands as a `proposed` rule) or a hand-written rule
- * (`{ label, rule, … }`), both optionally scoped to a flow.
+ * (`{ deviationId }` — lands as a custom rule) or a hand-written rule
+ * (`{ label, rule, … }`), both optionally scoped to a flow. `sourceFile` links
+ * the rule to the repo path its expectation is written in (absent = custom).
  */
 const createEvalBodySchema = z.union([
   z.object({
@@ -137,17 +135,17 @@ const createEvalBodySchema = z.union([
     rule: z.string().trim().min(1).max(2000),
     description: z.string().trim().max(2000).optional(),
     flowId: z.string().trim().min(1).max(100).optional(),
-    state: ruleStateSchema.optional(),
+    sourceFile: z.string().trim().min(1).max(500).nullable().optional(),
     autorunThreshold: z.number().int().min(1).max(1000).optional(),
     threshold: z.number().min(0).max(1).optional(),
     judgeModel: z.string().trim().min(1).max(200).optional(),
   }),
 ]);
 
-/** Body contract for PATCH /api/evals/:id — flow binding + lifecycle state + gate tuning. */
+/** Body contract for PATCH /api/evals/:id — flow binding + source file + gate tuning. */
 const evalPatchSchema = z.object({
   flowId: z.string().trim().min(1).max(100).nullable().optional(),
-  state: ruleStateSchema.optional(),
+  sourceFile: z.string().trim().min(1).max(500).nullable().optional(),
   autorunThreshold: z.number().int().min(1).max(1000).optional(),
   threshold: z.number().min(0).max(1).nullable().optional(),
   judgeModel: z.string().trim().min(1).max(200).nullable().optional(),
@@ -182,7 +180,7 @@ const importBodySchema = z.object({
   prune: z.boolean().default(false),
 });
 
-/** Body contract for POST /api/compare — two corpora + the optional flow whose watched rules form the suite. */
+/** Body contract for POST /api/compare — two corpora + the optional flow whose rules form the suite. */
 const compareBodySchema = z.object({
   flowId: z.string().trim().min(1).max(100).optional(),
   baseline: corpusRefSchema,
@@ -1060,7 +1058,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     if (!parsed.success) {
       return reply
         .code(400)
-        .send({ error: 'invalid body: expected { deviationId, flowId? } or { label, rule, description?, flowId?, state?, autorunThreshold?, threshold?, judgeModel? }' });
+        .send({ error: 'invalid body: expected { deviationId, flowId? } or { label, rule, description?, flowId?, sourceFile?, autorunThreshold?, threshold?, judgeModel? }' });
     }
     if (parsed.data.flowId && !(await flowExists(parsed.data.flowId))) {
       return reply.code(404).send({ error: 'flow not found' });
@@ -1080,7 +1078,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     if (!parsed.success) {
       return reply
         .code(400)
-        .send({ error: 'invalid body: expected { flowId?, state?, autorunThreshold?, threshold?, judgeModel? }' });
+        .send({ error: 'invalid body: expected { flowId?, sourceFile?, autorunThreshold?, threshold?, judgeModel? }' });
     }
     if (parsed.data.flowId && !(await flowExists(parsed.data.flowId))) {
       return reply.code(404).send({ error: 'flow not found' });

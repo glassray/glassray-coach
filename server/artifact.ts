@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { CoachDb } from './bootstrap.js';
 import { flowSelectorSchema, parseSelector, type FlowSelector } from './classify.js';
 import { createFlow, updateFlow } from './flows.js';
-import { createManualEval, type RuleState } from './evals.js';
+import { createManualEval, deleteEval } from './evals.js';
 import { evals, flows } from './schema.js';
 
 /*
@@ -71,8 +71,8 @@ const artifactRuleSchema = z.object({
   description: z.string().max(2000).optional(),
   /** The plain-language judged predicate (PASS/FAIL over one trace). */
   predicate: z.string().trim().min(1).max(2000),
-  /** Lifecycle: proposed (observed, not gating) | watched (autorun + gates check) | archived. */
-  state: z.enum(['proposed', 'watched', 'archived']).default('proposed'),
+  /** The repo path the expectation is written in (e.g. `watcher/digest.ts`); absent = custom (hand-written). */
+  source: z.string().trim().min(1).max(500).nullish(),
   /** Preferred judge model id; absent = the target's light-tier default. */
   judge: z.string().trim().min(1).max(200).nullish(),
   /** Pass-rate gate for `check` (0..1); absent = 1.0 (any failure breaches). */
@@ -134,13 +134,12 @@ const assignSlugs = <T>(rows: T[], stored: (r: T) => string | null, name: (r: T)
  * Serialize the target's flows + rules into the artifact shape, STAMPING the
  * derived slug onto any row that didn't have one yet — so the identity used in
  * the exported file is durable on this target from now on (a later rename
- * can't fork it). Active flows and non-archived rules only: archived state is
- * this target's local history, not part of the portable contract.
+ * can't fork it). Active flows only; every rule is portable (no lifecycle to
+ * exclude).
  */
 export const exportArtifact = async (db: CoachDb): Promise<Artifact> => {
   const flowRows = await db.select().from(flows).where(eq(flows.status, 'active')).orderBy(flows.createdAt, flows.id);
-  const evalRows = await db.select().from(evals).orderBy(evals.createdAt, evals.id);
-  const activeEvalRows = evalRows.filter((e) => e.state !== 'archived');
+  const activeEvalRows = await db.select().from(evals).orderBy(evals.createdAt, evals.id);
 
   const flowSlugs = assignSlugs(flowRows, (r) => r.slug, (r) => r.name);
   const ruleSlugs = assignSlugs(activeEvalRows, (r) => r.slug, (r) => r.label);
@@ -169,7 +168,7 @@ export const exportArtifact = async (db: CoachDb): Promise<Artifact> => {
       label: r.label,
       ...(r.description ? { description: r.description } : {}),
       predicate: r.rule,
-      state: (r.state === 'watched' || r.state === 'archived' ? r.state : 'proposed') as RuleState,
+      ...(r.sourceFile !== null ? { source: r.sourceFile } : {}),
       ...(r.judgeModel !== null ? { judge: r.judgeModel } : {}),
       ...(r.threshold !== null ? { threshold: r.threshold } : {}),
     })),
@@ -215,7 +214,7 @@ export const parseArtifactYaml = (text: string): Artifact => {
   return parsed.data;
 };
 
-/** One step of a reconcile plan. `prune` means ARCHIVE on this target (never a hard delete). */
+/** One step of a reconcile plan. `prune` ARCHIVES a flow, but DELETES a rule (no archived state). */
 export type PlanAction = {
   op: 'create' | 'update' | 'prune' | 'noop';
   kind: 'flow' | 'rule';
@@ -273,7 +272,7 @@ const diffRule = (file: ArtifactRule, target: SluggedEval, targetFlowSlugById: M
   const changes: string[] = [];
   const t = target.row;
   if (file.predicate !== t.rule) changes.push('predicate');
-  if (file.state !== t.state) changes.push(`state ${t.state}→${file.state}`);
+  if ((file.source ?? null) !== t.sourceFile) changes.push(`source ${t.sourceFile ?? '(custom)'}→${file.source ?? '(custom)'}`);
   if (file.label !== undefined && file.label !== t.label) changes.push('label');
   if (file.description !== undefined && file.description !== t.description) changes.push('description');
   if ((file.judge ?? null) !== t.judgeModel) changes.push(`judge ${t.judgeModel ?? '(default)'}→${file.judge ?? '(default)'}`);
@@ -286,9 +285,9 @@ const diffRule = (file: ArtifactRule, target: SluggedEval, targetFlowSlugById: M
 /**
  * Diff the artifact against the target — dbt/terraform-style, side-effect-free:
  * in file, not on target → create; in both, changed → update; on target (live),
- * not in file → prune (which `applyImport` only executes under `prune: true`,
- * and executes as an ARCHIVE — a push never silently deletes a server-authored
- * flow/rule). State transitions (`proposed → watched`) are ordinary updates.
+ * not in file → prune (which `applyImport` only executes under `prune: true`;
+ * a pruned flow is ARCHIVED, a pruned rule is DELETED — a rule has no archived
+ * state to fall back to).
  */
 export const planImport = async (db: CoachDb, artifact: Artifact): Promise<ImportPlan> => {
   const target = await loadTarget(db);
@@ -316,8 +315,9 @@ export const planImport = async (db: CoachDb, artifact: Artifact): Promise<Impor
     actions.push({ op: changes.length > 0 ? 'update' : 'noop', kind: 'rule', id: rule.id, changes });
   }
 
-  // Live target rows the file doesn't mention: prune candidates. Archived rows
-  // are this target's local history — never re-flagged.
+  // Live target rows the file doesn't mention: prune candidates. Archived flows
+  // are this target's local history — never re-flagged. Every rule is live, so
+  // any rule missing from the file is a prune (delete) candidate.
   const fileFlowSlugs = new Set(artifact.flows.map((f) => f.id));
   const fileRuleSlugs = new Set(artifact.rules.map((r) => r.id));
   for (const f of target.flows) {
@@ -326,8 +326,8 @@ export const planImport = async (db: CoachDb, artifact: Artifact): Promise<Impor
     }
   }
   for (const r of target.rules) {
-    if (r.row.state !== 'archived' && !fileRuleSlugs.has(r.slug)) {
-      actions.push({ op: 'prune', kind: 'rule', id: r.slug, changes: ['archive on target'] });
+    if (!fileRuleSlugs.has(r.slug)) {
+      actions.push({ op: 'prune', kind: 'rule', id: r.slug, changes: ['delete on target'] });
     }
   }
 
@@ -411,7 +411,7 @@ export const applyImport = async (
         rule: rule.predicate,
         description: rule.description,
         flowId: flowId ?? undefined,
-        state: rule.state,
+        sourceFile: rule.source ?? null,
         threshold: rule.threshold ?? undefined,
         judgeModel: rule.judge ?? undefined,
         slug: rule.id,
@@ -422,7 +422,7 @@ export const applyImport = async (
         .update(evals)
         .set({
           rule: rule.predicate,
-          state: rule.state,
+          sourceFile: rule.source ?? null,
           flowId: flowId ?? null,
           threshold: rule.threshold ?? null,
           judgeModel: rule.judge ?? null,
@@ -445,8 +445,9 @@ export const applyImport = async (
       const existing = targetFlowsBySlug.get(action.id);
       if (existing) await db.update(flows).set({ status: 'archived', updatedAt: new Date() }).where(eq(flows.id, existing.row.id));
     } else {
+      // A rule has no archived state — a prune is a hard delete (with its verdicts).
       const existing = targetRulesBySlug.get(action.id);
-      if (existing) await db.update(evals).set({ state: 'archived' }).where(eq(evals.id, existing.row.id));
+      if (existing) await deleteEval(db, existing.row.id);
     }
   }
 

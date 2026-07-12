@@ -267,15 +267,13 @@ export interface FlowMember {
   assignedAt: string;
 }
 
-/** A rule's lifecycle state: proposed (observed, not gating) | watched (autoruns + gates check) | archived. */
-export type RuleState = "proposed" | "watched" | "archived";
-
 /** An assertion rule attached to a flow, as listed in the flow's detail. */
 export interface FlowEvalRef {
   id: string;
   label: string;
   rule: string;
-  state: RuleState;
+  /** The repo path this rule's expectation is written in; null = custom (hand-written). */
+  sourceFile: string | null;
   /** Provenance: `deviation` or `manual`. */
   source: string;
   /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
@@ -341,9 +339,9 @@ export interface EvalSummary {
   sourceDeviationId: string | null;
   /** The flow this eval is scoped to (runs sample its members); null = global. */
   flowId: string | null;
-  /** Lifecycle: watched rules autorun and gate `glassray check`. */
-  state: RuleState;
-  /** New member traces (since the last run) needed to trigger an automatic rerun of a watched rule. */
+  /** The repo path this rule's expectation is written in; null = custom (hand-written). */
+  sourceFile: string | null;
+  /** New member traces (since the last run) needed to trigger an automatic rerun of a flow-scoped rule. */
   autorunThreshold: number;
   /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
   threshold: number | null;
@@ -660,24 +658,24 @@ export const resolveDeviation = (id: string): Promise<{ status: string }> =>
 export const reopenDeviation = (id: string): Promise<{ status: string }> =>
   postJson<{ status: string }>(`/api/deviations/${encodeURIComponent(id)}/reopen`);
 
-/** Create a hand-written rule from a label + rule text (+ optional flow scope / state / gate tuning) (POST /api/evals). */
+/** Create a hand-written rule from a label + rule text (+ optional flow scope / source file / gate tuning) (POST /api/evals). */
 export const createEval = (input: {
   label: string;
   rule: string;
   description?: string;
   flowId?: string;
-  state?: RuleState;
+  sourceFile?: string | null;
   autorunThreshold?: number;
   threshold?: number;
   judgeModel?: string;
 }): Promise<{ id: string }> => postJson<{ id: string }>("/api/evals", input);
 
-/** Patch a rule's flow binding / lifecycle state / gate tuning and get the fresh detail back (PATCH /api/evals/:id). */
+/** Patch a rule's flow binding / source file / gate tuning and get the fresh detail back (PATCH /api/evals/:id). */
 export const updateEval = (
   id: string,
   patch: {
     flowId?: string | null;
-    state?: RuleState;
+    sourceFile?: string | null;
     autorunThreshold?: number;
     threshold?: number | null;
     judgeModel?: string | null;

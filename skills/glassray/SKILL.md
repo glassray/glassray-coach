@@ -20,7 +20,7 @@ glassray run <flow> --label baseline    # score the world before the change
 # … make the change (e.g. swap Sonnet → Haiku) …
 glassray run <flow> --label candidate
 glassray compare <flow> baseline candidate   # pass-rate deltas + cost deltas
-# flip passing rules proposed → watched, commit glassray.yaml, git push
+# commit glassray.yaml, git push — the git review of the file IS the approval
 ```
 
 CLI output contract: stdout is the API's JSON verbatim, errors/status go to
@@ -57,8 +57,9 @@ This is what cloud Glassray does from production traffic; you do it from code:
 2. **Derive rules from the prompt's implicit contract.** Every constraint the
    system prompt states or assumes is a candidate assertion rule — "always
    answer in English", "factual, never invent", "topic is a 1-4 word label".
-   Author each as `state: proposed` (observe first; you flip to `watched` once
-   it proves stable).
+   Every rule is active; tie each to the file its expectation is written in via
+   `source:` (e.g. `watcher/digest.ts`). A rule you can't tie to a file is
+   custom (omit `source`). Acceptance is the git review of `glassray.yaml`.
 3. **Author `glassray.yaml`** — the flow (membership selector = the agent
    name), the rules, and the local-only `run` recipe:
 
@@ -76,11 +77,11 @@ rules:
   - id: english-summary
     flow: digest
     predicate: PASS if the summary is plain English and invents nothing not in the input.
-    state: proposed
+    source: src/digest.ts          # the file the expectation lives in (omit = custom)
   - id: topic-sensible
     flow: digest
     predicate: PASS if `topic` is a sensible 1-4 word English label.
-    state: proposed
+    source: src/digest.ts
 ```
 
 4. **Write the runner** (`run.command`). It must: read every input file in
@@ -133,10 +134,10 @@ Read the compare report: per-rule `passRate` baseline → candidate with
 the "is it cheaper?" number), and latency. Then:
 
 - Regressions → fix the change or accept the trade-off knowingly.
-- Green → flip the proven rules `proposed → watched` **in `glassray.yaml`**
-  and `glassray push` (that flip is the enforcement switch: watched rules
-  autorun on new traffic and gate `glassray check`).
-- Commit `glassray.yaml`, the runner, and the inputs; `git push`.
+- Green → commit `glassray.yaml`, the runner, and the inputs; `git push`. Every
+  rule is already active (it autoruns on new traffic and gates `glassray
+  check`); the **git review of `glassray.yaml`** is the approval — there is no
+  in-app promote.
 
 With a linked cloud project the baseline can be production itself:
 `glassray compare digest production candidate` (after `pull --traces`).
@@ -149,7 +150,7 @@ baseline; candidate from fresh traffic", and say so.
 
 ## 5 · CI: the check gate
 
-`glassray check --fixtures` runs every **watched** rule over the committed
+`glassray check --fixtures` runs every rule over the committed
 golden set (`glassray pull --as-fixtures` freezes it) and exits non-zero on
 any pass rate below the rule's `threshold` (default 1.0). Deterministic — same
 committed inputs — so a red means *the change you just made* broke it. Live
@@ -166,7 +167,7 @@ glassray evals get <id>       # verdicts flip-flopping on unchanged behaviour �
 
 A vague rule gets rewritten by editing its `predicate` in `glassray.yaml` and
 `glassray push` (the plan shows `~ update`). `glassray evals update` moves flow
-binding, `--state`, and gate tuning only.
+binding, `--source-file`, and gate tuning only.
 
 ## 7 · Reference
 
@@ -188,7 +189,7 @@ The loop (stdout = API JSON; long verbs take `--no-wait --timeout`):
 | `glassray pull --traces <flow> [-n 30]` | Ingest real cloud traces as the `production` corpus + pin their extracted inputs into `glassray/inputs/<flow>/`. |
 | `glassray pull --as-fixtures [--flow --limit --dir]` | Freeze golden traces for the `check` gate. |
 | `glassray push [--file --dry-run --prune]` | Reconcile glassray.yaml into the target (plan on stderr; prune = archive extras). |
-| `glassray check [--fixtures --dir --sample --timeout]` | Run every watched rule; exit 1 on a threshold breach. |
+| `glassray check [--fixtures --dir --sample --timeout]` | Run every rule; exit 1 on a threshold breach. |
 | `glassray link <project> [--endpoint --token] \| link --show` | Record the cloud project + auth for the cloud pulls. |
 
 Data + rules:
@@ -198,10 +199,10 @@ Data + rules:
 | `glassray traces list [--q --agent --status --flow --label --limit --offset]` / `get <id>` / `tail` | `--label` filters one run's corpus. |
 | `glassray stats` / `glassray usage` | Rollups incl. `estCostIfMeteredUsd`; Coach's own LLM spend. |
 | `glassray flows list/get/create/update/delete/audit/discover` | Durable flows; `audit` = classification quality. |
-| `glassray evals list` / `get <id>` | Rules with `state`, gate `threshold`, latest verdicts + history. |
-| `glassray evals create --label --rule [--flow --state --threshold --judge --autorun-threshold]` | Hand-written rule (default `watched`). |
-| `glassray evals create --deviation <id> [--flow]` | Promote a discovered deviation as a **proposed** rule (idempotent). |
-| `glassray evals update <id> [--flow\|--no-flow --state --threshold\|--no-threshold --judge\|--no-judge --autorun-threshold]` | Binding + lifecycle + gates. |
+| `glassray evals list` / `get <id>` | Rules with `sourceFile`, gate `threshold`, latest verdicts + history. |
+| `glassray evals create --label --rule [--flow --source-file --threshold --judge --autorun-threshold]` | Hand-written rule (custom unless `--source-file`). |
+| `glassray evals create --deviation <id> [--flow]` | Save a discovered deviation as a **custom** rule (idempotent). |
+| `glassray evals update <id> [--flow\|--no-flow --source-file --threshold\|--no-threshold --judge\|--no-judge --autorun-threshold]` | Binding + source + gates. |
 | `glassray evals run <id> [--sample --model]` / `delete <id>` | One-off scoring; delete removes verdicts. |
 | `glassray deviations list/get/resolve` · `discovery run` · `fix <id>` | The discovery → fix loop (secondary to the rule loop). |
 | `glassray runs list/get/cancel` | Background-run queue visibility. |

@@ -1,4 +1,4 @@
-import { desc, eq, inArray } from 'drizzle-orm';
+import { desc, eq, inArray, isNull } from 'drizzle-orm';
 import { z } from 'zod';
 import type { CoachDb } from './bootstrap.js';
 import { failRun, finishRun, isRunLive, judgeInWaves, renderTraceView } from './discovery.js';
@@ -10,9 +10,11 @@ import { evals, flowTraces, traces } from './schema.js';
 import { buildTraceView } from './vendor/index.js';
 
 /*
- * COMPARE — the change-with-confidence screen. Runs every WATCHED assertion
- * rule over two corpora (baseline vs candidate) and reports per-rule pass rate
- * + corpus cost for each side, plus the delta. This is what a model swap needs:
+ * COMPARE — the change-with-confidence screen. Runs the flow's assertion rules
+ * (or all global rules) over two corpora (baseline vs candidate) and reports
+ * per-rule pass rate + corpus cost for each side, plus the delta. Every rule is
+ * active, so the suite is the whole set — no lifecycle gate. This is what a
+ * model swap needs:
  * "did quality hold, and is it cheaper?". Verdicts are NOT persisted to
  * eval_results (a compare must never pollute an eval's regression history);
  * the full report lands in the run's stats blob.
@@ -161,10 +163,10 @@ const corpusStats = async (db: CoachDb, rows: Array<{ id: string; raw: unknown }
 const passRate = (passed: number, scored: number): number | null => (scored > 0 ? passed / scored : null);
 
 /**
- * Run one compare: resolve both corpora, score every watched rule (of the flow,
- * or every watched rule when no flow is given) over each side in concurrent
- * waves, and finish the run with the full report in its stats blob. Marks the
- * run `done` (or `error`, re-throwing) via the shared lifecycle helpers.
+ * Run one compare: resolve both corpora, score the suite (the flow's rules when
+ * a flow is given, else every global rule) over each side in concurrent waves,
+ * and finish the run with the full report in its stats blob. Marks the run
+ * `done` (or `error`, re-throwing) via the shared lifecycle helpers.
  */
 export const runCompare = async (
   db: CoachDb,
@@ -180,18 +182,18 @@ export const runCompare = async (
   try {
     const sampleSize = Math.max(1, Math.min(opts.sampleSize ?? DEFAULT_COMPARE_SAMPLE, MAX_COMPARE_SAMPLE));
 
-    // The suite: watched rules only — proposed rules observe, they don't gate.
-    const ruleRows = await db
+    // The suite: the flow's rules when scoped to a flow, else every global rule.
+    // Every rule is active — there is no lifecycle gate to filter on.
+    const suite = await db
       .select()
       .from(evals)
-      .where(opts.flowId ? eq(evals.flowId, opts.flowId) : eq(evals.state, 'watched'))
+      .where(opts.flowId ? eq(evals.flowId, opts.flowId) : isNull(evals.flowId))
       .orderBy(evals.createdAt, evals.id);
-    const suite = ruleRows.filter((r) => r.state === 'watched');
     if (suite.length === 0) {
       throw new Error(
         opts.flowId
-          ? `flow ${opts.flowId} has no watched rules — flip a rule to 'watched' first`
-          : "no watched rules to compare — flip a rule to 'watched' first",
+          ? `flow ${opts.flowId} has no rules to compare — add a rule to this flow first`
+          : 'no global rules to compare — add a rule first',
       );
     }
 
