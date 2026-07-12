@@ -2549,3 +2549,60 @@ a {
 .exp-chip-name {
   color: var(--muted-foreground);
 }
+
+/* Experiment card: the flow/cost meta row + a verdict accent stripe on the left. */
+.exp-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+}
+.exp-card-go {
+  border-left: 3px solid var(--success);
+}
+.exp-card-nogo {
+  border-left: 3px solid var(--destructive);
+}
+.exp-card-undecided,
+.exp-card-open {
+  border-left: 3px solid var(--border);
+}
+
+/* Verdict badge (go | no-go | undecided | open/running). */
+.verdict-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.verdict-badge-go {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+}
+.verdict-badge-nogo {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--destructive) 38%, transparent);
+}
+.verdict-badge-undecided,
+.verdict-badge-open {
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-color: var(--border);
+}
+
+/* Experiment detail: the meta row under the question header. */
+.exp-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.4rem;
+}

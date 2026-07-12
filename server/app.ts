@@ -25,6 +25,13 @@ import {
   runClassifySweep,
 } from './classify.js';
 import { corpusRefSchema, runCompare } from './compare.js';
+import {
+  concludeExperiment,
+  createExperiment,
+  getExperiment,
+  listExperiments,
+  newestTwoLabels,
+} from './experiments.js';
 import { claimQueuedRun, createRun, failRun, runDiscovery, type RunKind } from './discovery.js';
 import {
   autorunDueEvals,
@@ -191,6 +198,23 @@ const compareBodySchema = z.object({
 /** Query contract for GET /api/flows/:id/fixtures — how many newest members to freeze. */
 const fixturesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(20),
+});
+
+/** Body contract for POST /api/experiments — open a new experiment for a question, optionally scoped to a flow. */
+const createExperimentBodySchema = z.object({
+  flowId: z.string().trim().min(1).max(100).nullable().optional(),
+  question: z.string().trim().min(1).max(500),
+});
+
+/** Query contract for GET /api/experiments — optional flow scope. */
+const experimentListQuerySchema = z.object({
+  flowId: z.string().trim().min(1).max(100).optional(),
+});
+
+/** Body contract for POST /api/experiments/:id/report — the two corpus labels (default = the two newest). */
+const experimentReportBodySchema = z.object({
+  baseline: z.string().trim().min(1).max(200).optional(),
+  candidate: z.string().trim().min(1).max(200).optional(),
 });
 
 /** Body contract for POST /api/flows — a durable flow definition (selector and/or rule). */
@@ -1255,6 +1279,60 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
       runCompare(db, { runId, flowId, baseline, candidate, sampleSize, signal }),
     );
     return reply.code(202).send(res);
+  });
+
+  // ── experiments: the durable compare container + report ────────────────────
+
+  app.post('/api/experiments', async (req, reply) => {
+    const parsed = createExperimentBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid body: expected { question: string, flowId?: string }' });
+    }
+    if (parsed.data.flowId && !(await flowExists(parsed.data.flowId))) {
+      return reply.code(404).send({ error: 'flow not found' });
+    }
+    const id = await createExperiment(db, parsed.data);
+    return reply.code(201).send({ id });
+  });
+
+  app.get('/api/experiments', async (req, reply) => {
+    const query = experimentListQuerySchema.safeParse(req.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid flowId query parameter' });
+    const items = await listExperiments(db, query.data.flowId);
+    return { items, total: items.length };
+  });
+
+  app.get('/api/experiments/:id', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const experiment = await getExperiment(db, id);
+    if (!experiment) return reply.code(404).send({ error: 'experiment not found' });
+    return experiment;
+  });
+
+  app.post('/api/experiments/:id/report', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const parsed = experimentReportBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid body: expected { baseline?: string, candidate?: string }' });
+    }
+    const experiment = await getExperiment(db, id);
+    if (!experiment) return reply.code(404).send({ error: 'experiment not found' });
+    // Default the corpora to the two newest run labels (candidate newest).
+    let { baseline, candidate } = parsed.data;
+    if (baseline === undefined || candidate === undefined) {
+      const [newest, prior] = await newestTwoLabels(db);
+      candidate ??= newest;
+      baseline ??= prior;
+    }
+    if (!baseline || !candidate) {
+      return reply.code(400).send({
+        error: 'need a baseline and a candidate label — run the flow twice (glassray run <flow> --label <x>) or pass both',
+      });
+    }
+    const res = await enqueueRun('compare', `experiment:${id}`, (runId, signal) =>
+      concludeExperiment(db, { experimentId: id, runId, baseline: baseline!, candidate: candidate!, signal }),
+    );
+    return reply.code(202).send({ ...res, experimentId: id, baseline, candidate });
   });
 
   app.get('/api/llm', async () => resolveLlm());

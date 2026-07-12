@@ -183,6 +183,36 @@ export const llmUsage = pgTable('llm_usage', {
   costUsd: doublePrecision('cost_usd').notNull(),
 });
 
+/**
+ * A durable EXPERIMENT: one question ("can we switch to Haiku?") with a
+ * baseline vs candidate comparison and a generated report + verdict. `compare`
+ * is the mechanism inside it; the report is what you keep. Experiments are
+ * records — never part of `glassray.yaml`.
+ */
+export const experiments = pgTable('experiments', {
+  /** Prefixed random-hex id (`exp_…`). */
+  id: text('id').primaryKey(),
+  /** The flow whose rules form the suite; null = global rules. */
+  flowId: text('flow_id'),
+  /** The plain-language question the experiment answers. */
+  question: text('question').notNull(),
+  /** Lifecycle: `open` (created) → `running` (report generating) → `concluded`. */
+  status: text('status').notNull().default('open'),
+  /** Suggested outcome once concluded: `go` | `no-go` | `undecided`; null until then. */
+  verdict: text('verdict'),
+  /** The run label of the baseline corpus; null until a report runs. */
+  baselineLabel: text('baseline_label'),
+  /** The run label of the candidate corpus; null until a report runs. */
+  candidateLabel: text('candidate_label'),
+  /** The compare run this experiment wrapped; null until a report runs. */
+  runId: text('run_id'),
+  /** The generated report (compare result + prose summary + failing examples); null until concluded. */
+  report: jsonb('report'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  /** When the experiment was concluded (report generated); null while open/running. */
+  concludedAt: timestamp('concluded_at', { withTimezone: true, mode: 'date' }),
+});
+
 /** One per-trace verdict produced by scoring an eval's rule during a run. */
 export const evalResults = pgTable('eval_results', {
   /** Prefixed random-hex id (`evr_…`). */

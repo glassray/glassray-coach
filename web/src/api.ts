@@ -747,6 +747,75 @@ export const fetchLastCompare = async (): Promise<RunStatus | null> => {
   return items.find((r) => r.kind === "compare" && r.status === "done") ?? null;
 };
 
+/** One regressed rule surfaced in an experiment report (rule-level). */
+export interface ExperimentFailingRule {
+  ruleId: string;
+  ruleLabel: string;
+  baselinePassRate: number | null;
+  candidatePassRate: number | null;
+  deltaPassRate: number | null;
+  candidateFailed: number;
+  candidateScored: number;
+}
+
+/** The generated experiment report: the compare result + prose + suggested verdict. */
+export interface ExperimentReport {
+  verdict: "go" | "no-go" | "undecided";
+  summary: string;
+  regressions: number;
+  costDeltaUsd: number;
+  failing: ExperimentFailingRule[];
+  /** The full compare report, embedded so the detail renders without a second fetch. */
+  compare: CompareReport;
+}
+
+/** One durable experiment — a question with a baseline/candidate compare + generated report. */
+export interface Experiment {
+  id: string;
+  flowId: string | null;
+  question: string;
+  status: "open" | "running" | "concluded";
+  verdict: "go" | "no-go" | "undecided" | null;
+  baselineLabel: string | null;
+  candidateLabel: string | null;
+  runId: string | null;
+  report: ExperimentReport | null;
+  createdAt: string;
+  concludedAt: string | null;
+}
+
+/** GET /api/experiments — every experiment plus the count. */
+export interface ExperimentListResponse {
+  items: Experiment[];
+  total: number;
+}
+
+/** POST /api/experiments/:id/report response — the compare run's handle + the resolved corpora. */
+export interface ExperimentReportHandle extends RunHandle {
+  experimentId: string;
+  baseline: string;
+  candidate: string;
+}
+
+/** Load every experiment, optionally one flow's (GET /api/experiments). */
+export const fetchExperiments = (flowId?: string): Promise<ExperimentListResponse> =>
+  getJson<ExperimentListResponse>(`/api/experiments${flowId ? `?flowId=${encodeURIComponent(flowId)}` : ""}`);
+
+/** Load one experiment with its embedded report (GET /api/experiments/:id). */
+export const fetchExperiment = (id: string): Promise<Experiment> =>
+  getJson<Experiment>(`/api/experiments/${encodeURIComponent(id)}`);
+
+/** Open a new experiment for a question (POST /api/experiments). */
+export const createExperiment = (input: { flowId?: string | null; question: string }): Promise<{ id: string }> =>
+  postJson<{ id: string }>("/api/experiments", input);
+
+/** Conclude an experiment: run the compare + generate the report (POST /api/experiments/:id/report → 202). */
+export const runExperimentReport = (
+  id: string,
+  corpora: { baseline?: string; candidate?: string } = {},
+): Promise<ExperimentReportHandle> =>
+  postJson<ExperimentReportHandle>(`/api/experiments/${encodeURIComponent(id)}/report`, corpora);
+
 /** Re-issue an (edited) LLM request as free text (POST /api/replay); throws the server's error on 502. */
 export const replaySpan = (req: ReplayRequest): Promise<ReplayResponse> =>
   postJson<ReplayResponse>("/api/replay", req);

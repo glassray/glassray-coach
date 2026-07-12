@@ -1,90 +1,231 @@
-import { useEffect, useState } from "react";
-import type { CompareRuleResult, FlowSummary, RunStatus } from "../api";
-import { fetchFlows, fetchRuns } from "../api";
+import { useCallback, useEffect, useState } from "react";
+import type { Experiment, FlowSummary } from "../api";
+import { createExperiment, fetchExperiments, fetchFlows, fetchRun, runExperimentReport } from "../api";
 import { relativeTime } from "../format";
-import { DeltaChip, describeRef, parseCompareReport } from "./Compare";
+import { DeltaChip } from "./Compare";
 
 /*
  * EXPERIMENTS (#/experiments) — the record of every change you tried. An
- * experiment is one compare run, read as a question (baseline → candidate),
- * a verdict (did any rule regress?), and the per-rule deltas. The full report
- * lives on the detail page (#/experiment/:id). This is the local half's memory:
- * what held, what regressed, on this machine.
+ * experiment is a durable object: a question, a baseline vs candidate compare,
+ * and a generated report + verdict. This list shows the cards; the full report
+ * lives on the detail page (#/experiment/:id).
  */
 
-/** A short verdict for a compare run: regressed (any rule down), clean, or its non-terminal status. */
-const verdictOf = (run: RunStatus, regressions: number | null): { label: string; cls: string } => {
-  if (run.status === "running" || run.status === "queued") return { label: run.status, cls: "verdict" };
-  if (run.status === "error") return { label: "error", cls: "verdict verdict-fail" };
-  if (regressions === null) return { label: "no report", cls: "verdict" };
-  return regressions > 0
-    ? { label: `${regressions} regressed`, cls: "verdict verdict-fail" }
-    : { label: "clean", cls: "verdict verdict-pass" };
+/** A verdict/status badge for an experiment card. */
+export const VerdictBadge = ({ exp }: { exp: Experiment }) => {
+  if (exp.status !== "concluded" || exp.verdict === null) {
+    const label = exp.status === "running" ? "running…" : exp.status === "open" ? "open" : "no verdict";
+    return <span className="verdict-badge verdict-badge-open">{label}</span>;
+  }
+  const cls =
+    exp.verdict === "go" ? "verdict-badge-go" : exp.verdict === "no-go" ? "verdict-badge-nogo" : "verdict-badge-undecided";
+  return <span className={`verdict-badge ${cls}`}>{exp.verdict}</span>;
 };
 
-/** One experiment card: title, verdict, per-rule delta chips, and when it ran. */
-const ExperimentCard = ({ run, flows }: { run: RunStatus; flows: FlowSummary[] }) => {
-  const report = parseCompareReport(run);
-  const title = report
-    ? `${describeRef(report.baseline.ref, flows)} → ${describeRef(report.candidate.ref, flows)}`
-    : "Comparison";
-  const verdict = verdictOf(run, report ? report.regressions : null);
+/** Compact USD for the cost-delta chip. */
+const money = (usd: number): string => {
+  const v = Number.isFinite(usd) ? usd : 0;
+  const abs = Math.abs(v);
+  const s = abs < 0.01 ? "<$0.01" : `$${abs.toFixed(abs < 1 ? 4 : 2)}`;
+  return v < 0 ? `−${s}` : v > 0 ? `+${s}` : "$0";
+};
+
+/** One experiment card: question, verdict, flow tag, per-rule delta chips, cost delta. */
+const ExperimentCard = ({ exp, flows }: { exp: Experiment; flows: FlowSummary[] }) => {
+  const flowName = exp.flowId ? (flows.find((f) => f.id === exp.flowId)?.name ?? "flow") : null;
+  const report = exp.report;
   return (
-    <a className="exp-card" href={`#/experiment/${encodeURIComponent(run.id)}`}>
+    <a className={`exp-card exp-card-${exp.verdict ?? "open"}`} href={`#/experiment/${encodeURIComponent(exp.id)}`}>
       <div className="exp-card-head">
-        <span className="exp-card-title">{title}</span>
-        <span className={verdict.cls}>{verdict.label}</span>
-        <span className="muted exp-card-when">{relativeTime(run.finishedAt ?? run.startedAt)}</span>
+        <span className="exp-card-title">{exp.question}</span>
+        <VerdictBadge exp={exp} />
+        <span className="muted exp-card-when">{relativeTime(exp.concludedAt ?? exp.createdAt)}</span>
       </div>
-      {report && (
+      <div className="exp-card-meta">
+        {flowName ? <span className="tag">{flowName}</span> : <span className="muted">global rules</span>}
+        {report ? (
+          <span className="mono muted" title="candidate − baseline cost if metered">
+            cost {money(report.costDeltaUsd)}
+          </span>
+        ) : null}
+      </div>
+      {report ? (
         <div className="exp-chips">
-          {report.rules.map((r: CompareRuleResult) => (
+          {report.compare.rules.map((r) => (
             <span key={r.id} className="exp-chip">
               <span className="exp-chip-name">{r.label}</span>
               <DeltaChip delta={r.deltaPassRate} />
             </span>
           ))}
         </div>
-      )}
+      ) : null}
     </a>
   );
 };
 
-/** The Experiments list: every compare run as an experiment, newest-first. */
-export const Experiments = () => {
-  const [runs, setRuns] = useState<RunStatus[] | null>(null);
-  const [flows, setFlows] = useState<FlowSummary[]>([]);
+/** The "new experiment" form: pick a flow + a question + the two run labels, then run the report. */
+const NewExperimentForm = ({
+  flows,
+  onCreated,
+}: {
+  flows: FlowSummary[];
+  onCreated: (id: string) => void;
+}) => {
+  const [question, setQuestion] = useState("");
+  const [flowId, setFlowId] = useState("");
+  const [baseline, setBaseline] = useState("");
+  const [candidate, setCandidate] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void fetchRuns()
-      .then(setRuns)
-      .catch(() => setRuns([]));
-    void fetchFlows()
-      .then((r) => setFlows(r.items))
-      .catch(() => {});
+  /** Create the experiment, run its report (compare), poll to done, then hand the id back. */
+  const submit = useCallback(
+    async (event: React.FormEvent) => {
+      event.preventDefault();
+      if (!question.trim() || busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const { id } = await createExperiment({
+          question: question.trim(),
+          flowId: flowId || null,
+        });
+        const handle = await runExperimentReport(id, {
+          baseline: baseline.trim() || undefined,
+          candidate: candidate.trim() || undefined,
+        });
+        // Poll the compare run to a terminal state so the card lands concluded.
+        for (;;) {
+          await new Promise((r) => setTimeout(r, 1200));
+          const run = await fetchRun(handle.runId);
+          if (run.status === "done") break;
+          if (run.status === "error") throw new Error(run.error ?? "The compare failed.");
+        }
+        onCreated(id);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Could not run the experiment.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [question, flowId, baseline, candidate, busy, onCreated],
+  );
+
+  return (
+    <form className="panel new-eval" onSubmit={submit}>
+      <div className="new-eval-field">
+        <label className="new-eval-label" htmlFor="exp-question">
+          Question
+        </label>
+        <input
+          id="exp-question"
+          className="new-eval-input"
+          placeholder="Can we switch the digest from Sonnet to Haiku?"
+          value={question}
+          onChange={(e) => setQuestion(e.target.value)}
+        />
+      </div>
+      <div className="new-eval-field">
+        <label className="new-eval-label" htmlFor="exp-flow">
+          Rule suite <span className="muted">(optional — one flow's rules; else all global rules)</span>
+        </label>
+        <select id="exp-flow" className="new-eval-input" value={flowId} onChange={(e) => setFlowId(e.target.value)}>
+          <option value="">All global rules</option>
+          {flows
+            .filter((f) => f.status === "active")
+            .map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+        </select>
+      </div>
+      <div className="compare-form-row">
+        <div className="new-eval-field">
+          <label className="new-eval-label" htmlFor="exp-baseline">
+            Baseline label <span className="muted">(blank = 2nd-newest)</span>
+          </label>
+          <input
+            id="exp-baseline"
+            className="new-eval-input"
+            placeholder="baseline"
+            value={baseline}
+            onChange={(e) => setBaseline(e.target.value)}
+          />
+        </div>
+        <div className="new-eval-field">
+          <label className="new-eval-label" htmlFor="exp-candidate">
+            Candidate label <span className="muted">(blank = newest)</span>
+          </label>
+          <input
+            id="exp-candidate"
+            className="new-eval-input"
+            placeholder="candidate"
+            value={candidate}
+            onChange={(e) => setCandidate(e.target.value)}
+          />
+        </div>
+      </div>
+      {error ? <p className="runbar-error">{error}</p> : null}
+      <div className="new-eval-actions">
+        <button className="btn" type="submit" disabled={busy || !question.trim()}>
+          {busy ? "Running…" : "Run experiment"}
+        </button>
+      </div>
+    </form>
+  );
+};
+
+/** The Experiments list: every experiment as a card, newest-first, with a "new experiment" flow. */
+export const Experiments = () => {
+  const [items, setItems] = useState<Experiment[] | null>(null);
+  const [flows, setFlows] = useState<FlowSummary[]>([]);
+  const [showForm, setShowForm] = useState(false);
+
+  /** Reload the experiment list (and the flows for name lookups + the form picker). */
+  const load = useCallback(async () => {
+    const [exps, flowsRes] = await Promise.all([
+      fetchExperiments().catch(() => ({ items: [] as Experiment[], total: 0 })),
+      fetchFlows("all").catch(() => ({ items: [] as FlowSummary[], unclassified: 0 })),
+    ]);
+    setItems(exps.items);
+    setFlows(flowsRes.items);
   }, []);
 
-  const experiments = (runs ?? []).filter((r) => r.kind === "compare");
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  /** After a new experiment concludes, hide the form, refresh, and open its detail. */
+  const onCreated = useCallback(
+    (id: string) => {
+      setShowForm(false);
+      void load();
+      window.location.hash = `#/experiment/${encodeURIComponent(id)}`;
+    },
+    [load],
+  );
 
   return (
     <>
       <div className="page-head">
         <div>
           <h1 className="page-title">Experiments</h1>
-          <p className="muted">Every change you tried — what held and what regressed, on this machine.</p>
+          <p className="muted">Every change you tried — the question, the verdict, and what regressed.</p>
         </div>
-        <a className="btn" href="#/compare">
-          New experiment
-        </a>
+        <button className="btn" type="button" onClick={() => setShowForm((v) => !v)}>
+          {showForm ? "Close" : "New experiment"}
+        </button>
       </div>
-      {runs === null ? (
+      {showForm ? <NewExperimentForm flows={flows} onCreated={onCreated} /> : null}
+      {items === null ? (
         <p className="muted">Loading…</p>
-      ) : experiments.length === 0 ? (
-        <p className="empty">No experiments yet — run a comparison to test a change against your rules.</p>
+      ) : items.length === 0 ? (
+        <p className="empty">No experiments yet — pose a question and run it against your rules over two corpora.</p>
       ) : (
         <div className="exp-list">
-          {experiments.map((run) => (
-            <ExperimentCard key={run.id} run={run} flows={flows} />
+          {items.map((exp) => (
+            <ExperimentCard key={exp.id} exp={exp} flows={flows} />
           ))}
         </div>
       )}

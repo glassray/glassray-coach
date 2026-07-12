@@ -141,6 +141,21 @@ CREATE TABLE IF NOT EXISTS eval_results (
 );
 CREATE INDEX IF NOT EXISTS eval_results_eval_id_idx ON eval_results (eval_id);
 CREATE INDEX IF NOT EXISTS eval_results_run_id_idx ON eval_results (run_id);
+CREATE TABLE IF NOT EXISTS experiments (
+  id text PRIMARY KEY,
+  flow_id text,
+  question text NOT NULL,
+  status text NOT NULL DEFAULT 'open',
+  verdict text,
+  baseline_label text,
+  candidate_label text,
+  run_id text,
+  report jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  concluded_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS experiments_created_at_idx ON experiments (created_at DESC);
+CREATE INDEX IF NOT EXISTS experiments_flow_id_idx ON experiments (flow_id);
 CREATE TABLE IF NOT EXISTS llm_usage (
   id text PRIMARY KEY,
   at timestamptz NOT NULL DEFAULT now(),
