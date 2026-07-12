@@ -50,6 +50,62 @@ const MemberHead = () => (
   </thead>
 );
 
+/** The most common non-null `sourceFile` among a flow's rules (the flow's primary source), or null. */
+const primarySourceFile = (data: FlowDetailData): string | null => {
+  const counts = new Map<string, number>();
+  for (const ev of data.evals) {
+    if (ev.sourceFile) counts.set(ev.sourceFile, (counts.get(ev.sourceFile) ?? 0) + 1);
+  }
+  let best: string | null = null;
+  let bestN = 0;
+  for (const [file, n] of counts) {
+    if (n > bestN) {
+      best = file;
+      bestN = n;
+    }
+  }
+  return best;
+};
+
+/** One fact row in the "Built from" rail. */
+const RailFact = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div className="rail-fact">
+    <span className="rail-fact-label">{label}</span>
+    <span className="rail-fact-value">{children}</span>
+  </div>
+);
+
+/**
+ * The "Built from" rail: only the LOCAL-meaningful facts — the flow's Agent
+ * (from its selector) and Source file (the most common among its rules). Model
+ * and Recipe come from the `run` recipe, which is local-only in `glassray.yaml`
+ * and never server state, so they're omitted here rather than invented. No
+ * cloud/monitoring fields (Health, Repo, Inputs, Last-run).
+ */
+const BuiltFromRail = ({ data }: { data: FlowDetailData }) => {
+  const agent = data.selector?.agent ?? null;
+  const source = primarySourceFile(data);
+  return (
+    <aside className="flow-rail panel card-pad">
+      <h2 className="card-title rail-title">Built from</h2>
+      <RailFact label="Agent">
+        {agent ? <span className="tag">{agent}</span> : <span className="muted">not pinned</span>}
+      </RailFact>
+      <RailFact label="Source">
+        {source ? (
+          <span className="mono rail-source">{source}</span>
+        ) : (
+          <span className="muted">custom / not linked</span>
+        )}
+      </RailFact>
+      <p className="muted rail-note">
+        Model and recipe live in this repo's <span className="mono">glassray.yaml</span> <span className="mono">run</span>{" "}
+        block (local-only) — not tracked by Coach.
+      </p>
+    </aside>
+  );
+};
+
 /** Editable definition form state: identity + selector fields + rule + classify mode. */
 interface DefinitionDraft {
   name: string;
@@ -210,6 +266,8 @@ export const FlowDetail = ({ id }: { id: string }) => {
         ← All flows
       </a>
 
+      <div className="flow-grid">
+        <div className="flow-main">
       <header className="detail-head">
         <div className="detail-title-row">
           <h1 className="detail-title">{data.name}</h1>
@@ -431,6 +489,9 @@ export const FlowDetail = ({ id }: { id: string }) => {
           ) : null}
         </>
       ) : null}
+        </div>
+        <BuiltFromRail data={data} />
+      </div>
     </section>
   );
 };

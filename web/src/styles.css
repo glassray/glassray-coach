@@ -2606,3 +2606,62 @@ a {
   flex-wrap: wrap;
   margin-top: 0.4rem;
 }
+
+/* ---------- Flow page: two-column layout + "Built from" rail ---------- */
+
+.flow-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 17rem;
+  gap: 1.5rem;
+  align-items: start;
+}
+.flow-main {
+  min-width: 0;
+}
+/* The rail sticks alongside the (taller) main column on wide screens. */
+.flow-rail {
+  position: sticky;
+  top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.rail-title {
+  margin: 0;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+.rail-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.rail-fact-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted-foreground);
+}
+.rail-fact-value {
+  font-size: 0.9rem;
+}
+.rail-source {
+  color: var(--brand);
+  word-break: break-all;
+}
+.rail-note {
+  font-size: 0.74rem;
+  line-height: 1.4;
+  margin: 0;
+}
+/* Narrow screens: the rail drops below the content. */
+@media (max-width: 860px) {
+  .flow-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .flow-rail {
+    position: static;
+  }
+}
