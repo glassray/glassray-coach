@@ -8,15 +8,21 @@ import { formatNumber, relativeTime } from "../format";
  * (`from watcher/digest.ts`) when it's read from code, else a muted `custom`
  * tag. Every rule is active — this replaces the retired lifecycle.
  */
-export const SourceChip = ({ anchors }: { anchors: Anchor[] | null }) => {
+export const SourceChip = ({ anchors, compact = false }: { anchors: Anchor[] | null; compact?: boolean }) => {
   const file = anchors?.[0]?.file ?? null;
-  return file ? (
+  if (!file) {
+    return (
+      <span className="source-chip source-chip-custom" title="Custom — hand-written, not tied to a file">
+        custom
+      </span>
+    );
+  }
+  // Compact = just the file's basename (dense lists where one file repeats); the
+  // full path stays on hover so nothing is lost.
+  const shown = compact ? (file.split(/[\\/]/).pop() ?? file) : file;
+  return (
     <span className="source-chip" title={`Derived from ${file} — approve by reviewing glassray.yaml`}>
-      from <span className="source-chip-file">{file}</span>
-    </span>
-  ) : (
-    <span className="source-chip source-chip-custom" title="Custom — hand-written, not tied to a file">
-      custom
+      from <span className="source-chip-file">{shown}</span>
     </span>
   );
 };

@@ -34,7 +34,7 @@ const USAGE = {
   stats: 'glassray stats',
   usage: 'glassray usage',
   flows:
-    "glassray flows list [--status active|archived|all] | get <id> | create --name <s> [--description <s>] [--rule <s>] [--classify selector|llm] [--selector '<json>'] [--created-by user|claude] | update <id> [--name <s>] [--description <s>] [--rule <s>|--no-rule] [--classify selector|llm] [--selector '<json>'|--no-selector] [--status active|archived] | delete <id> | audit <id> | discover [--no-wait] [--timeout <s>]",
+    "glassray flows list [--status active|archived|all] | get <id> | create --name <s> [--description <s>] [--rule <s>] [--classify selector|llm] [--selector '<json>'] [--created-by user|claude] | update <id> [--name <s>] [--description <s>] [--rule <s>|--no-rule] [--classify selector|llm] [--selector '<json>'|--no-selector] [--status active|archived] | delete <id> | audit <id> | discover [--code-root <path>] [--file glassray.yaml] [--no-wait] [--timeout <s>]",
   evals:
     'glassray evals list | get <id> | create (--deviation <id> [--flow <id>]) or (--name <s> --text <s> [--description <s>] [--flow <id>] [--source-file <path>] [--threshold <0..1>] [--judge <model>] [--autorun-threshold <n>]) | update <id> [--flow <id>|--no-flow] [--source-file <path>|--no-source-file] [--threshold <0..1>|--no-threshold] [--judge <model>|--no-judge] [--autorun-threshold <n>] | run <id> [--sample <n>] [--model <s>] [--no-wait] [--timeout <s>] | delete <id>',
   deviations: 'glassray deviations list | get <id> | resolve <id> [--reopen]',
@@ -445,8 +445,30 @@ export const cmdFlows = async ({ port, args }) => {
       return printJson(await api(port, `/api/flows/${encodeURIComponent(id)}/audit`));
     }
     case 'discover': {
-      const { values } = parseFlags('flows', args.slice(1), WAIT_OPTIONS);
-      return enqueueAndWait(port, '/api/flows/run', {}, waitOpts('flows', values));
+      // Discover flows FROM CODE: resolve the repo root to scan from glassray.yaml's
+      // `codeRoot` (or --code-root), make it absolute, and hand it to the server.
+      const { values } = parseFlags('flows', args.slice(1), {
+        ...WAIT_OPTIONS,
+        file: { type: 'string' },
+        'code-root': { type: 'string' },
+      });
+      const body = {};
+      if (values['code-root']) {
+        body.codeRoot = path.resolve(values['code-root']);
+      } else {
+        const file = values.file ?? ARTIFACT_FILE;
+        const text = await readArtifactFileText(file);
+        if (text !== null) {
+          try {
+            const { artifact } = await post(port, '/api/artifact/parse', { yaml: text });
+            if (artifact?.codeRoot) body.codeRoot = path.resolve(path.dirname(file), artifact.codeRoot);
+          } catch {
+            // Fall through with no codeRoot — the server resolves from its own cwd,
+            // or returns a helpful 400 telling the user to set codeRoot.
+          }
+        }
+      }
+      return enqueueAndWait(port, '/api/flows/run', body, waitOpts('flows', values));
     }
     default:
       return usageFail('flows', verb === undefined ? 'missing verb' : `unknown verb "${verb}"`);

@@ -312,7 +312,14 @@ export const FlowDetail = ({ id }: { id: string }) => {
               </div>
             )}
             {data.rule ? (
-              <div className="flow-def-line">“{data.rule}”</div>
+              // A discovery flow seeds its LLM rule from its description, so the
+              // quote would just repeat the sub-header — note it instead of
+              // printing the same paragraph twice.
+              data.rule.trim() === data.description.trim() ? (
+                <div className="muted flow-def-line">Members are matched against the description above (LLM rule).</div>
+              ) : (
+                <div className="flow-def-line">“{data.rule}”</div>
+              )
             ) : (
               <div className="muted flow-def-line">No rule — members come from the selector only.</div>
             )}
@@ -422,7 +429,7 @@ export const FlowDetail = ({ id }: { id: string }) => {
             <li key={ev.id}>
               <a className="mini-row" href={`#/eval/${encodeURIComponent(ev.id)}`}>
                 <span className="mini-name">{ev.name}</span>
-                <SourceChip anchors={ev.anchors} />
+                <SourceChip anchors={ev.anchors} compact />
                 {ev.threshold !== null ? (
                   <span className="tag" title="`glassray check` gate — fails below this pass rate">
                     gate ≥{Math.round(ev.threshold * 100)}%

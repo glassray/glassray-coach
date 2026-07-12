@@ -498,3 +498,162 @@ export const generateText = async ({
     }
   }
 };
+
+// ── tool-using explore agent (Claude Agent SDK over ~/.claude, read-only tools) ─
+
+/**
+ * Budget (ms) for one tool-using explore agent run before its abort fires.
+ * Generous: a repo scan runs many read/grep turns and can legitimately take
+ * many minutes (cloud caps the equivalent explore at 40 min).
+ */
+const EXPLORE_BUDGET_MS = 30 * 60_000;
+
+/**
+ * The read-only built-in tools the code-explorer runs with. Deliberately
+ * excludes `Bash`: the explorer reads a repo that may be untrusted, so a
+ * prompt-injection in the code must not reach a shell. Read + Grep (ripgrep) +
+ * Glob cover finding flow definitions and following references.
+ */
+const EXPLORE_TOOLS = ['Read', 'Grep', 'Glob'] as const;
+
+/** What a tool-using explore run returns: the validated object, its usage, and how many distinct files were read. */
+export type ToolAgentResult<T> = { object: T; usage: LlmUsage; provider: LlmProvider; model: string; filesRead: number };
+
+/** One raw tool-loop run's outcome — final text + usage + the count of distinct files Read. */
+type ToolLoopOutcome = { text: string; usage: LlmUsage; filesRead: number };
+
+/** Extract the `Read` tool's target path from a tool_use block's input (the SDK names it `file_path`; accept `path` too). */
+const readPathOf = (input: unknown): string | null => {
+  const o = (input ?? {}) as { file_path?: unknown; path?: unknown };
+  if (typeof o.file_path === 'string') return o.file_path;
+  if (typeof o.path === 'string') return o.path;
+  return null;
+};
+
+/**
+ * Run ONE tool-using Agent SDK `query()` rooted at `cwd`, streaming until the
+ * success result. Fires `onProgress` with the running count of DISTINCT files
+ * the agent has `Read`. Read-only tools run unattended via `bypassPermissions`.
+ * NOTE: `cwd` is the relative base the agent starts from, not a hard sandbox —
+ * under `bypassPermissions` a Read can follow imports beyond `cwd` (e.g. into a
+ * sibling package). Acceptable for a local tool reading your own repo; there is
+ * no `Bash`, so it is strictly read-only.
+ */
+const runExploreLoop = async (
+  args: { cwd: string; system: string; prompt: string; model: string; signal?: AbortSignal; onProgress?: (n: number) => void },
+): Promise<ToolLoopOutcome> => {
+  const { query } = await import('@anthropic-ai/claude-agent-sdk');
+  const abort = new AbortController();
+  let budgetHit = false;
+  const timer = setTimeout(() => {
+    budgetHit = true;
+    abort.abort();
+  }, EXPLORE_BUDGET_MS);
+  const onExternalAbort = () => abort.abort();
+  if (args.signal) {
+    if (args.signal.aborted) abort.abort();
+    else args.signal.addEventListener('abort', onExternalAbort, { once: true });
+  }
+
+  const readFiles = new Set<string>();
+  let text = '';
+  let usage: LlmUsage = NO_USAGE;
+  try {
+    const tools = [...EXPLORE_TOOLS];
+    const response = query({
+      prompt: args.prompt,
+      options: {
+        abortController: abort,
+        cwd: args.cwd,
+        model: args.model,
+        systemPrompt: args.system,
+        tools,
+        allowedTools: tools,
+        permissionMode: 'bypassPermissions',
+        allowDangerouslySkipPermissions: true,
+      },
+    });
+    for await (const msg of response) {
+      if (msg.type === 'assistant') {
+        for (const block of msg.message.content) {
+          if (block.type === 'tool_use' && block.name === 'Read') {
+            const fp = readPathOf(block.input);
+            if (fp !== null && !readFiles.has(fp)) {
+              readFiles.add(fp);
+              args.onProgress?.(readFiles.size);
+            }
+          }
+        }
+      }
+      if (msg.type === 'result' && msg.subtype === 'success') {
+        text = msg.result;
+        const u = (msg as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+        if (u) usage = { tokensIn: u.input_tokens ?? 0, tokensOut: u.output_tokens ?? 0 };
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+    args.signal?.removeEventListener('abort', onExternalAbort);
+  }
+  if (!text) {
+    if (budgetHit) throw new Error(`code-explore exceeded its ${EXPLORE_BUDGET_MS / 60_000}m budget — aborted`);
+    throw new Error('Code-explorer returned no result');
+  }
+  return { text, usage, filesRead: readFiles.size };
+};
+
+/**
+ * Run an agentic, TOOL-USING explore over the source tree at `cwd` and return a
+ * schema-validated object. The one place Coach enables the Agent SDK's built-in
+ * Read/Grep/Glob tools — the code-based flow discovery path (`code-explore.ts`).
+ * Subscription-only: it drives the local `~/.claude` Agent SDK subprocess (the
+ * `mock` / metered providers are gated upstream). On a JSON-parse / schema
+ * failure it takes a SINGLE corrective retry (a re-run is expensive), mirroring
+ * `subscriptionStructured`.
+ */
+export const runToolAgent = async <T>(args: {
+  /** Working directory the agent's read-only tools are jailed to (the repo root). */
+  cwd: string;
+  /** System instruction text. */
+  system: string;
+  /** The user prompt. */
+  prompt: string;
+  /** Zod schema the final JSON must satisfy. */
+  schema: z.ZodType<T>;
+  /** Model id override (defaults to the heavy-tier default). */
+  model?: string;
+  /** Abort signal — cancels the in-flight run. */
+  signal?: AbortSignal;
+  /** Live progress callback — the running count of DISTINCT files Read so far. */
+  onProgress?: (filesRead: number) => void;
+}): Promise<ToolAgentResult<T>> => {
+  const provider = resolveProvider();
+  if (provider !== 'claude-subscription') {
+    throw new Error('runToolAgent requires the claude-subscription provider (local ~/.claude).');
+  }
+  const model = args.model && args.model.length > 0 ? args.model : resolveModelId(provider, 'heavy');
+
+  const attempt = async (hint = ''): Promise<ToolAgentResult<T>> => {
+    const raw = await runExploreLoop({
+      cwd: args.cwd,
+      system: args.system,
+      prompt: hint ? `${args.prompt}\n\n${hint}` : args.prompt,
+      model,
+      signal: args.signal,
+      onProgress: args.onProgress,
+    });
+    return { object: parseJsonObject(raw.text, args.schema), usage: raw.usage, provider, model, filesRead: raw.filesRead };
+  };
+
+  try {
+    return await attempt();
+  } catch (firstErr) {
+    // A caller abort must not burn a second full budget on a retry.
+    args.signal?.throwIfAborted();
+    const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
+    const parseFailed = msg.startsWith('Model output') || msg.startsWith('No JSON object');
+    if (!parseFailed) throw firstErr;
+    const hint = `Your previous response could not be parsed: ${msg}. Reply again with ONLY the final JSON object that satisfies the requested schema — strictly valid JSON: every property name and every string double-quoted, all inner quotes and newlines inside code snippets escaped, no trailing commas, no comments, no prose, no code fences.`;
+    return await attempt(hint);
+  }
+};

@@ -7,11 +7,14 @@ import { RunBar } from "./RunBar";
 
 /** Human summary of a finished discover-flows run for the RunBar success line. */
 const describeFlows = (run: RunStatus): string => {
-  const scanned = readStat(run.stats, "tracesScanned");
-  if (scanned === 0) return "No traces captured yet — send some traces to Coach first, then discover flows.";
-  const found = readStat(run.stats, "flowCount");
-  if (found === 0) return `Scanned ${plural(scanned, "trace")} — no new flows; the existing set already covers them.`;
-  return `Scanned ${plural(scanned, "trace")} · added ${plural(found, "new flow")}.`;
+  const files = readStat(run.stats, "filesRead");
+  const flowsFound = readStat(run.stats, "flowCount");
+  const rules = readStat(run.stats, "ruleCount");
+  const readPart = files > 0 ? `Read ${plural(files, "file")}` : "Read the code";
+  if (flowsFound === 0 && rules === 0) {
+    return `${readPart} — no new flows; either the set already covers them, or no codeRoot is set in glassray.yaml.`;
+  }
+  return `${readPart} · added ${plural(flowsFound, "new flow")} and ${plural(rules, "rule")}.`;
 };
 
 /** Chip conveying how a flow classifies members: deterministic selector vs LLM rule. */
@@ -344,7 +347,8 @@ export const Flows = () => {
       <div className="empty">
         <h2 className="empty-title">No flows yet</h2>
         <p className="empty-sub">
-          A flow is a named agent workflow. Define one by hand, or discover them from your captured traces.
+          A flow is a named agent workflow. Define one by hand, or discover them by reading your code — Coach maps
+          the flows and their rules straight from the source at your <span className="mono">codeRoot</span>.
         </p>
         <div className="empty-actions">
           {newButton}

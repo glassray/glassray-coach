@@ -1,147 +1,17 @@
 import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { z } from 'zod';
 import type { CoachDb } from './bootstrap.js';
-import {
-  materializeSelectorFlow,
-  oneLineIntent,
-  parseSelector,
-  type FlowSelector,
-} from './classify.js';
-import { failRun, finishRun, isRunLive } from './discovery.js';
-import { generateStructuredTracked } from './usage.js';
+import { materializeSelectorFlow, parseSelector, type FlowSelector } from './classify.js';
 import { newId } from './ids.js';
 import { evals, flowTraces, flows, traces, type Anchor } from './schema.js';
 
 /*
  * Durable FLOWS — named, persistent agent behaviours, each with a membership
  * definition (a deterministic `selector` and/or a plain-language `rule` for the
- * LLM classify sweep). This module owns flow CRUD, the detail/audit reads, and
- * the DISCOVER bootstrap: an LLM clustering pass over recent traces that
- * *seeds* rule-defined flows for Claude/the user to tighten into selectors —
- * it adds to the durable set instead of replacing it.
+ * LLM classify sweep). This module owns flow CRUD and the detail/audit reads.
+ * DISCOVERY of flows from the agent's source lives in `code-explore.ts` (it
+ * writes flow rows through the same tables); traces attach to those flows via
+ * the classify sweep (`classify.ts`).
  */
-
-/** Flow-clustering system prompt (the discover bootstrap). */
-const FLOW_SYSTEM_PROMPT =
-  'You group agent execution traces into a small set of recurring FLOWS — named agent workflows defined by their intent (what the user is trying to accomplish). Traces that pursue the same underlying goal belong to the same flow. Give each flow a short, human-readable name and a one-sentence membership rule.';
-
-/** Output of the flow-clustering pass — named flows, each with a membership rule + its member trace ids. */
-const FlowSchema = z.object({
-  flows: z
-    .array(
-      z.object({
-        name: z.string().describe('Short, human-readable flow name (the recurring workflow)'),
-        description: z.string().describe('One- or two-sentence description of what this flow does'),
-        rule: z
-          .string()
-          .describe(
-            'One-sentence membership rule: what makes a trace belong to this flow (used to classify future traces)',
-          ),
-        memberTraceIds: z
-          .array(z.string())
-          .describe('The trace ids (verbatim from the list) that belong to this flow'),
-      }),
-    )
-    .describe('The recurring flows the traces cluster into'),
-});
-
-/** Max traces fed into one flow-clustering pass (keeps the prompt bounded). */
-const MAX_FLOW_TRACES = 200;
-
-/**
- * Run the DISCOVER bootstrap: cluster the newest traces into named flows and
- * persist any that are genuinely new as durable, rule-defined (`classify='llm'`)
- * flows. Existing active flows are shown to the model (and name-deduped on
- * persist) so repeated discovers extend the set rather than duplicating it.
- * Marks the run `done` (or `error`, re-throwing) via the lifecycle helpers.
- */
-export const runFlows = async (
-  db: CoachDb,
-  opts: { runId: string; signal?: AbortSignal },
-): Promise<{ flowCount: number }> => {
-  try {
-    const rows = await db
-      .select({
-        id: traces.id,
-        name: traces.name,
-        agent: traces.agent,
-        inputPreview: traces.inputPreview,
-      })
-      .from(traces)
-      .orderBy(desc(traces.receivedAt), desc(traces.id))
-      .limit(MAX_FLOW_TRACES);
-
-    if (rows.length === 0) {
-      await finishRun(db, opts.runId, { flowCount: 0, tracesScanned: 0 });
-      return { flowCount: 0 };
-    }
-
-    const existing = await db
-      .select({ name: flows.name, description: flows.description })
-      .from(flows)
-      .where(eq(flows.status, 'active'));
-    const existingNames = new Set(existing.map((f) => f.name.trim().toLowerCase()));
-    const existingBlock =
-      existing.length > 0
-        ? `\n\nThese flows ALREADY exist — do NOT re-propose them; only propose NEW flows for traces that don't fit any of them:\n${existing.map((f) => `- ${f.name}: ${f.description}`).join('\n')}`
-        : '';
-
-    const knownIds = new Set(rows.map((r) => r.id));
-    const listing = rows
-      .map((r) => `- ${r.id} | name: ${r.name ?? '—'} | agent: ${r.agent ?? '—'} | intent: ${oneLineIntent(r.inputPreview)}`)
-      .join('\n');
-
-    const { object } = await generateStructuredTracked(db, 'flows', {
-      schema: FlowSchema,
-      system: FLOW_SYSTEM_PROMPT,
-      prompt: `Here are recent agent traces, one per line (\`- <traceId> | name | agent | intent\`):\n\n${listing}${existingBlock}\n\nCluster them into a small set of recurring flows. For each flow give a short name, a one- or two-sentence description, a one-sentence membership rule (what makes a trace belong), and the list of member trace ids (copied verbatim from the lines above).`,
-      tier: 'heavy',
-      temperature: 0,
-      signal: opts.signal,
-    });
-
-    // If the run was canceled or timed out while the model was clustering, stop
-    // before persisting — don't write flows for a run the user already abandoned.
-    if (!(await isRunLive(db, opts.runId))) return { flowCount: 0 };
-
-    // Persist each genuinely-new flow with its valid, de-duplicated members.
-    // Unknown / hallucinated trace ids are dropped; name collisions with an
-    // existing active flow are skipped (the model was told not to re-propose).
-    let flowCount = 0;
-    for (const flow of object.flows) {
-      if (existingNames.has(flow.name.trim().toLowerCase())) continue;
-      const members = [...new Set(flow.memberTraceIds.map((id) => id.toLowerCase()))].filter((id) =>
-        knownIds.has(id),
-      );
-      // A flow whose member ids the model fully hallucinated has no real traces
-      // behind it — skip it so the flows list never shows a 0-trace flow.
-      if (members.length === 0) continue;
-      const flowId = newId('flow_');
-      await db.insert(flows).values({
-        id: flowId,
-        runId: opts.runId,
-        name: flow.name,
-        description: flow.description,
-        rule: flow.rule,
-        classify: 'llm',
-        createdBy: 'discovery',
-        traceCount: members.length,
-      });
-      await db
-        .insert(flowTraces)
-        .values(members.map((traceId) => ({ flowId, traceId, assignedBy: 'llm', confidence: 'high' })))
-        .onConflictDoNothing();
-      existingNames.add(flow.name.trim().toLowerCase());
-      flowCount += 1;
-    }
-
-    await finishRun(db, opts.runId, { flowCount, tracesScanned: rows.length });
-    return { flowCount };
-  } catch (err) {
-    await failRun(db, opts.runId, err instanceof Error ? err.message : String(err)).catch(() => {});
-    throw err;
-  }
-};
 
 // ── flow CRUD + reads ────────────────────────────────────────────────────────
 

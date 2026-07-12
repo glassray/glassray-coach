@@ -50,9 +50,9 @@ import {
   deleteFlow,
   getFlowDetail,
   listFlows,
-  runFlows,
   updateFlow,
 } from './flows.js';
+import { runCodeDiscover } from './code-explore.js';
 import { runImprover } from './improver.js';
 import { collectTraceIds, otlpEnvelopeSchema, TraceNormalizeError, upsertTrace } from './ingest.js';
 import { providerAvailability, resolveLlm, resolveLlmConfig } from './llm.js';
@@ -66,6 +66,24 @@ import { loadBuildTraceView } from './trace-view.js';
 
 /** Max accepted request body size — 16 MiB OTLP envelope cap. */
 const BODY_LIMIT_BYTES = 16 * 1024 * 1024;
+
+/**
+ * Resolve the code-discovery root from the `glassray.yaml` in the server's
+ * launch cwd: its top-level `codeRoot`, made absolute relative to the file
+ * (`codeRoot: ..` beside the file → the parent dir). This is the web button's
+ * fallback — the CLI passes `codeRoot` explicitly. Null when there's no file,
+ * no `codeRoot`, or the file doesn't parse.
+ */
+const resolveCodeRootFromCwd = (): string | null => {
+  const file = path.join(process.cwd(), 'glassray.yaml');
+  if (!existsSync(file)) return null;
+  try {
+    const artifact = parseArtifactYaml(readFileSync(file, 'utf8'));
+    return artifact.codeRoot ? path.resolve(path.dirname(file), artifact.codeRoot) : null;
+  } catch {
+    return null;
+  }
+};
 
 /**
  * Decode a (possibly compressed) request body. The `@glassray/tracing` SDK and
@@ -825,8 +843,26 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     return reply.code(202).send(res);
   });
 
-  app.post('/api/flows/run', async (_req, reply) => {
-    const res = await enqueueRun('flows', 'flows', (runId, signal) => runFlows(db, { runId, signal }));
+  app.post('/api/flows/run', async (req, reply) => {
+    // Discover flows FROM CODE: read the agent's source at `codeRoot` and map its
+    // flows + rules (the local analogue of cloud's trace-driven discovery). The
+    // CLI resolves `codeRoot` from glassray.yaml and passes it; the web button
+    // sends none, so the server falls back to the glassray.yaml in its launch cwd.
+    const body = (req.body ?? {}) as { codeRoot?: unknown };
+    const explicit =
+      typeof body.codeRoot === 'string' && body.codeRoot.trim().length > 0
+        ? path.resolve(body.codeRoot.trim())
+        : null;
+    const codeRoot = explicit ?? resolveCodeRootFromCwd();
+    if (codeRoot === null && resolveLlm().provider !== 'mock') {
+      return reply.code(400).send({
+        error:
+          'Code discovery needs a codeRoot to scan. Add `codeRoot: <path>` to glassray.yaml (the repo root Claude should read), then run discover again.',
+      });
+    }
+    const res = await enqueueRun('flows', 'flows', (runId, signal) =>
+      runCodeDiscover(db, { runId, signal, codeRoot }),
+    );
     return reply.code(202).send(res);
   });
 

@@ -93,6 +93,12 @@ export const artifactSchema = z.object({
   version: z.literal(1),
   /** Cloud project ref (resolved once linked); carried through verbatim locally. */
   project: z.string().trim().min(1).max(200).optional(),
+  /**
+   * LOCAL-ONLY: the repo root `glassray discover` reads to map flows from CODE,
+   * relative to this file (`..` = the parent dir) or absolute. Lives only in the
+   * file — never server state; import plan/apply ignores it (like `run`).
+   */
+  codeRoot: z.string().trim().min(1).max(500).optional(),
   flows: z.array(artifactFlowSchema).default([]),
   rules: z.array(artifactRuleSchema).default([]),
   /** Where golden traces live relative to the file (informational for the CLI). */
@@ -203,6 +209,7 @@ export const mergeLocalOnly = (fresh: Artifact, base: Artifact): Artifact => {
   return {
     ...fresh,
     ...(fresh.project === undefined && base.project !== undefined ? { project: base.project } : {}),
+    ...(fresh.codeRoot === undefined && base.codeRoot !== undefined ? { codeRoot: base.codeRoot } : {}),
     flows: fresh.flows.map((f) => {
       const run = baseRunBySlug.get(f.id);
       return run !== undefined && f.run === undefined ? { ...f, run } : f;
