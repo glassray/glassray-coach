@@ -50,11 +50,12 @@ const MemberHead = () => (
   </thead>
 );
 
-/** The most common non-null `sourceFile` among a flow's rules (the flow's primary source), or null. */
+/** The most common code-anchor file among a flow's rules (the flow's primary source), or null. */
 const primarySourceFile = (data: FlowDetailData): string | null => {
   const counts = new Map<string, number>();
   for (const ev of data.evals) {
-    if (ev.sourceFile) counts.set(ev.sourceFile, (counts.get(ev.sourceFile) ?? 0) + 1);
+    const file = ev.anchors?.[0]?.file;
+    if (file) counts.set(file, (counts.get(file) ?? 0) + 1);
   }
   let best: string | null = null;
   let bestN = 0;
@@ -420,8 +421,8 @@ export const FlowDetail = ({ id }: { id: string }) => {
           {data.evals.map((ev) => (
             <li key={ev.id}>
               <a className="mini-row" href={`#/eval/${encodeURIComponent(ev.id)}`}>
-                <span className="mini-name">{ev.label}</span>
-                <SourceChip sourceFile={ev.sourceFile} />
+                <span className="mini-name">{ev.name}</span>
+                <SourceChip anchors={ev.anchors} />
                 {ev.threshold !== null ? (
                   <span className="tag" title="`glassray check` gate — fails below this pass rate">
                     gate ≥{Math.round(ev.threshold * 100)}%

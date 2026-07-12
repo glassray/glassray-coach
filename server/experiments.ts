@@ -7,7 +7,7 @@ import { experiments, runs, traces } from './schema.js';
 /*
  * EXPERIMENTS — the durable container for one question ("can we switch to
  * Haiku?"). An experiment wraps a baseline-vs-candidate `compare` and keeps the
- * generated report + suggested verdict. `runCompare` is the mechanism; the
+ * generated report (data only, no go/no-go call). `runCompare` is the mechanism; the
  * experiment persists its result and the prose you share. Experiments are
  * records — never part of `glassray.yaml`.
  */
@@ -15,7 +15,7 @@ import { experiments, runs, traces } from './schema.js';
 /** One rule's two-sided result inside a compare report (mirrors compare.ts's RuleComparison). */
 type CompareRule = {
   id: string;
-  label: string;
+  name: string;
   baseline: { scored: number; passed: number; failed: number; passRate: number | null };
   candidate: { scored: number; passed: number; failed: number; passRate: number | null };
   deltaPassRate: number | null;
@@ -42,11 +42,9 @@ export type FailingRule = {
   candidateScored: number;
 };
 
-/** The generated experiment report: the compare result + prose + verdict, stored on the row. */
+/** The generated experiment report: the compare result + prose, stored on the row. Data only — no go/no-go call; the human decides. */
 export type ExperimentReport = {
-  /** Suggested outcome: `no-go` when any rule regressed, else `go`. */
-  verdict: 'go' | 'no-go' | 'undecided';
-  /** One-paragraph plain-language summary (rules held/regressed + the cost delta). */
+  /** One-paragraph plain-language summary (rules held/regressed + the cost delta). No recommendation. */
   summary: string;
   /** How many rules regressed. */
   regressions: number;
@@ -64,7 +62,6 @@ export type ExperimentRecord = {
   flowId: string | null;
   question: string;
   status: 'open' | 'running' | 'concluded';
-  verdict: 'go' | 'no-go' | 'undecided' | null;
   baselineLabel: string | null;
   candidateLabel: string | null;
   runId: string | null;
@@ -103,7 +100,6 @@ const toRecord = (row: typeof experiments.$inferSelect): ExperimentRecord => ({
   flowId: row.flowId,
   question: row.question,
   status: row.status as ExperimentRecord['status'],
-  verdict: (row.verdict ?? null) as ExperimentRecord['verdict'],
   baselineLabel: row.baselineLabel,
   candidateLabel: row.candidateLabel,
   runId: row.runId,
@@ -143,11 +139,10 @@ export const newestTwoLabels = async (db: CoachDb): Promise<string[]> => {
   return rows.map((r) => r.label).filter((l): l is string => l !== null);
 };
 
-/** Turn a finished compare report into the generated experiment report + suggested verdict (deterministic, template-based). */
+/** Turn a finished compare report into the generated experiment report — the data, stated plainly, with no go/no-go call. */
 export const buildExperimentReport = (compare: CompareReport): ExperimentReport => {
   const regressed = compare.rules.filter((r) => r.regressed);
   const held = compare.rules.filter((r) => !r.regressed);
-  const verdict: ExperimentReport['verdict'] = regressed.length > 0 ? 'no-go' : 'go';
   const costDelta = compare.costIfMeteredDeltaUsd;
   const costPhrase =
     costDelta < 0
@@ -157,24 +152,24 @@ export const buildExperimentReport = (compare: CompareReport): ExperimentReport 
         : `cost unchanged (${money(compare.candidate.estCostIfMeteredUsd)})`;
   const rulesPhrase =
     regressed.length > 0
-      ? `${held.length} of ${compare.rules.length} rule(s) held; ${regressed.length} regressed (${regressed.map((r) => r.label).join(', ')})`
+      ? `${held.length} of ${compare.rules.length} rule(s) held; ${regressed.length} regressed (${regressed.map((r) => r.name).join(', ')})`
       : `all ${compare.rules.length} rule(s) held`;
-  const summary = `${rulesPhrase}. ${costPhrase[0]!.toUpperCase()}${costPhrase.slice(1)}. Suggested verdict: ${verdict}.`;
+  const summary = `${rulesPhrase}. ${costPhrase[0]!.toUpperCase()}${costPhrase.slice(1)}.`;
   const failing: FailingRule[] = regressed.map((r) => ({
     ruleId: r.id,
-    ruleLabel: r.label,
+    ruleLabel: r.name,
     baselinePassRate: r.baseline.passRate,
     candidatePassRate: r.candidate.passRate,
     deltaPassRate: r.deltaPassRate,
     candidateFailed: r.candidate.failed,
     candidateScored: r.candidate.scored,
   }));
-  return { verdict, summary, regressions: regressed.length, costDeltaUsd: costDelta, failing, compare };
+  return { summary, regressions: regressed.length, costDeltaUsd: costDelta, failing, compare };
 };
 
 /**
  * Conclude an experiment: run `compare` over the flow's rules (baseline vs
- * candidate labels), store the result, generate the report + verdict, and mark
+ * candidate labels), store the result, generate the report, and mark
  * it `concluded`. Runs as a queued `compare` runner — `runCompare` finalizes
  * the run row with the compare report in its stats, which this then reads back
  * and wraps. On a compare failure the experiment reverts to `open` (the run
@@ -189,7 +184,7 @@ export const concludeExperiment = async (
     candidate: string;
     signal?: AbortSignal;
   },
-): Promise<{ verdict: ExperimentReport['verdict'] }> => {
+): Promise<{ regressions: number }> => {
   const rows = await db.select().from(experiments).where(eq(experiments.id, opts.experimentId)).limit(1);
   const exp = rows[0];
   if (!exp) throw new Error(`experiment ${opts.experimentId} not found`);
@@ -225,7 +220,7 @@ export const concludeExperiment = async (
   const report = buildExperimentReport(compare);
   await db
     .update(experiments)
-    .set({ status: 'concluded', verdict: report.verdict, report, concludedAt: new Date() })
+    .set({ status: 'concluded', report, concludedAt: new Date() })
     .where(eq(experiments.id, opts.experimentId));
-  return { verdict: report.verdict };
+  return { regressions: report.regressions };
 };

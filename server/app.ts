@@ -7,6 +7,7 @@ import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import {
+  anchorSchema,
   applyImport,
   artifactSchema,
   artifactToYaml,
@@ -128,9 +129,9 @@ const discoveryBodySchema = z.object({
 
 /**
  * Body contract for POST /api/evals — either "save from a deviation"
- * (`{ deviationId }` — lands as a custom rule) or a hand-written rule
- * (`{ label, rule, … }`), both optionally scoped to a flow. `sourceFile` links
- * the rule to the repo path its expectation is written in (absent = custom).
+ * (`{ deviationId }` — lands as a promoted rule) or a hand-written rule
+ * (`{ name, text, … }`), both optionally scoped to a flow. `anchors` pin WHERE
+ * in code the rule is enforced (supplying them makes it `source: 'code'`).
  */
 const createEvalBodySchema = z.union([
   z.object({
@@ -138,21 +139,21 @@ const createEvalBodySchema = z.union([
     flowId: z.string().trim().min(1).max(100).optional(),
   }),
   z.object({
-    label: z.string().trim().min(1).max(200),
-    rule: z.string().trim().min(1).max(2000),
+    name: z.string().trim().min(1).max(200),
+    text: z.string().trim().min(1).max(2000),
     description: z.string().trim().max(2000).optional(),
     flowId: z.string().trim().min(1).max(100).optional(),
-    sourceFile: z.string().trim().min(1).max(500).nullable().optional(),
+    anchors: z.array(anchorSchema).nullable().optional(),
     autorunThreshold: z.number().int().min(1).max(1000).optional(),
     threshold: z.number().min(0).max(1).optional(),
     judgeModel: z.string().trim().min(1).max(200).optional(),
   }),
 ]);
 
-/** Body contract for PATCH /api/evals/:id — flow binding + source file + gate tuning. */
+/** Body contract for PATCH /api/evals/:id — flow binding + code anchors + gate tuning. */
 const evalPatchSchema = z.object({
   flowId: z.string().trim().min(1).max(100).nullable().optional(),
-  sourceFile: z.string().trim().min(1).max(500).nullable().optional(),
+  anchors: z.array(anchorSchema).nullable().optional(),
   autorunThreshold: z.number().int().min(1).max(1000).optional(),
   threshold: z.number().min(0).max(1).nullable().optional(),
   judgeModel: z.string().trim().min(1).max(200).nullable().optional(),
@@ -1082,7 +1083,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     if (!parsed.success) {
       return reply
         .code(400)
-        .send({ error: 'invalid body: expected { deviationId, flowId? } or { label, rule, description?, flowId?, sourceFile?, autorunThreshold?, threshold?, judgeModel? }' });
+        .send({ error: 'invalid body: expected { deviationId, flowId? } or { name, text, description?, flowId?, anchors?, autorunThreshold?, threshold?, judgeModel? }' });
     }
     if (parsed.data.flowId && !(await flowExists(parsed.data.flowId))) {
       return reply.code(404).send({ error: 'flow not found' });
@@ -1102,7 +1103,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     if (!parsed.success) {
       return reply
         .code(400)
-        .send({ error: 'invalid body: expected { flowId?, sourceFile?, autorunThreshold?, threshold?, judgeModel? }' });
+        .send({ error: 'invalid body: expected { flowId?, anchors?, autorunThreshold?, threshold?, judgeModel? }' });
     }
     if (parsed.data.flowId && !(await flowExists(parsed.data.flowId))) {
       return reply.code(404).send({ error: 'flow not found' });

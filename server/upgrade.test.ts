@@ -101,12 +101,16 @@ describe('0.1 → 0.2 datadir upgrade', () => {
     expect(orphan.status).toBe('error');
   });
 
-  it('gives legacy evals the flow-scoping + source-file defaults', async () => {
+  it('gives legacy evals the flow-scoping + provenance defaults', async () => {
     const ev = (await rt.db.select().from(evals).where(eq(evals.id, 'eval_old')))[0]!;
     expect(ev.flowId).toBeNull();
-    // A legacy eval lands custom (no source file) — every rule is active now; the
-    // `state` column is retained only vestigially (the legacy migration set it).
-    expect(ev.sourceFile).toBeNull();
+    // A legacy eval lands authored (`source: 'promoted'`, no anchors) — every rule
+    // is active now; the `state` column is retained only vestigially.
+    expect(ev.anchors).toBeNull();
+    expect(ev.source).toBe('promoted');
+    // The old label/rule columns are renamed to the cloud FlowRule vocabulary.
+    expect(ev.name).toBe('Old eval');
+    expect(ev.text).toBe('Be nice');
     expect(ev.autorunThreshold).toBe(10);
     expect(ev.threshold).toBeNull();
     expect(ev.judgeModel).toBeNull();

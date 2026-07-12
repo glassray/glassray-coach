@@ -139,8 +139,8 @@ export const Overview = () => {
               {evals.slice(0, 8).map((e) => (
                 <li key={e.id}>
                   <a className="mini-row" href={`#/eval/${encodeURIComponent(e.id)}`}>
-                    <span className="mini-name">{e.label}</span>
-                    <SourceChip sourceFile={e.sourceFile} />
+                    <span className="mini-name">{e.name}</span>
+                    <SourceChip anchors={e.anchors} />
                     <HealthBadge ev={e} />
                   </a>
                 </li>
@@ -177,7 +177,7 @@ export const Overview = () => {
               {lastCompare.report.rules.slice(0, 4).map((r) => (
                 <li key={r.id}>
                   <a className="mini-row" href="#/experiments">
-                    <span className="mini-name">{r.label}</span>
+                    <span className="mini-name">{r.name}</span>
                     <span className="mono muted">
                       {r.baseline.passRate === null ? "—" : `${Math.round(r.baseline.passRate * 100)}%`}
                       {" → "}

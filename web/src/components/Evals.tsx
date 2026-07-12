@@ -1,23 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
-import type { EvalSummary, FlowSummary } from "../api";
+import type { Anchor, EvalSummary, FlowSummary } from "../api";
 import { createEval, fetchEvals, fetchFlows } from "../api";
 import { formatNumber, relativeTime } from "../format";
 
 /**
- * Provenance chip for a rule: the repo path its expectation is written in
- * (`from watcher/digest.ts`) when linked, else a muted `custom` tag. Every rule
- * is active — this replaces the retired proposed/watched/archived lifecycle.
+ * Provenance chip for a rule: the repo path its first code anchor points at
+ * (`from watcher/digest.ts`) when it's read from code, else a muted `custom`
+ * tag. Every rule is active — this replaces the retired lifecycle.
  */
-export const SourceChip = ({ sourceFile }: { sourceFile: string | null }) =>
-  sourceFile ? (
-    <span className="source-chip" title={`Derived from ${sourceFile} — approve by reviewing glassray.yaml`}>
-      from <span className="source-chip-file">{sourceFile}</span>
+export const SourceChip = ({ anchors }: { anchors: Anchor[] | null }) => {
+  const file = anchors?.[0]?.file ?? null;
+  return file ? (
+    <span className="source-chip" title={`Derived from ${file} — approve by reviewing glassray.yaml`}>
+      from <span className="source-chip-file">{file}</span>
     </span>
   ) : (
     <span className="source-chip source-chip-custom" title="Custom — hand-written, not tied to a file">
       custom
     </span>
   );
+};
 
 /** A compact pass/fail proportion bar for one eval's latest run (empty when never run). */
 const ResultBar = ({ passed, failed }: { passed: number; failed: number }) => {
@@ -76,8 +78,8 @@ const NewEvalForm = ({ flows, onCreated }: { flows: FlowSummary[]; onCreated: ()
       setError(null);
       try {
         await createEval({
-          label: label.trim(),
-          rule: rule.trim(),
+          name: label.trim(),
+          text: rule.trim(),
           description: description.trim() || undefined,
           flowId: flowId || undefined,
         });
@@ -262,12 +264,12 @@ export const Evals = () => {
                 >
                   <td>
                     <a className="cell-name cell-link" href={`#/eval/${encodeURIComponent(ev.id)}`}>
-                      {ev.label}
+                      {ev.name}
                     </a>
-                    <div className="cell-preview">{ev.rule}</div>
+                    <div className="cell-preview">{ev.text}</div>
                   </td>
                   <td>
-                    <SourceChip sourceFile={ev.sourceFile} />
+                    <SourceChip anchors={ev.anchors} />
                   </td>
                   <td>
                     <FlowChip flowId={ev.flowId} flowName={flows.find((f) => f.id === ev.flowId)?.name} />

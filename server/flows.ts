@@ -10,7 +10,7 @@ import {
 import { failRun, finishRun, isRunLive } from './discovery.js';
 import { generateStructuredTracked } from './usage.js';
 import { newId } from './ids.js';
-import { evals, flowTraces, flows, traces } from './schema.js';
+import { evals, flowTraces, flows, traces, type Anchor } from './schema.js';
 
 /*
  * Durable FLOWS — named, persistent agent behaviours, each with a membership
@@ -339,11 +339,11 @@ const DETAIL_MEMBER_CAP = 100;
 /** An assertion rule attached to a flow, as listed in the flow's detail. */
 export type FlowRuleRef = {
   id: string;
-  label: string;
-  rule: string;
-  /** The repo path this rule's expectation is written in; null = custom (hand-written). */
-  sourceFile: string | null;
-  /** Provenance: `deviation` or `manual`. */
+  name: string;
+  text: string;
+  /** WHERE in code this rule is enforced (cloud `FlowRule.anchors`); null = authored/custom. */
+  anchors: Anchor[] | null;
+  /** Provenance (cloud `FlowRule.source`): `code` or `promoted`. */
   source: string;
   /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
   threshold: number | null;
@@ -378,9 +378,9 @@ export const getFlowDetail = async (
     db
       .select({
         id: evals.id,
-        label: evals.label,
-        rule: evals.rule,
-        sourceFile: evals.sourceFile,
+        name: evals.name,
+        text: evals.text,
+        anchors: evals.anchors,
         source: evals.source,
         threshold: evals.threshold,
         lastRunAt: evals.lastRunAt,

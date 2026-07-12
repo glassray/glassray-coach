@@ -100,7 +100,7 @@ beforeAll(async () => {
   await ingest(makeEnvelope('b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2', 'baseline', 'claude-sonnet-4-6'));
   await ingest(makeEnvelope('c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3', 'haiku', 'claude-haiku-4-5'));
   await ingest(makeEnvelope('d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4', 'haiku', 'claude-haiku-4-5'));
-  await post('/api/evals', { label: 'English summary', rule: 'PASS if plain English.' }, 201);
+  await post('/api/evals', { name: 'English summary', text: 'PASS if plain English.' }, 201);
 }, 120_000);
 
 afterAll(async () => {
@@ -115,10 +115,11 @@ describe('experiments', () => {
     const list = await get('/api/experiments');
     expect(list.items.some((e: any) => e.id === id)).toBe(true);
     const detail = await get(`/api/experiments/${id}`);
-    expect(detail).toMatchObject({ question: 'Can we switch to Haiku?', status: 'open', verdict: null, report: null });
+    expect(detail).toMatchObject({ question: 'Can we switch to Haiku?', status: 'open', report: null });
+    expect(detail.verdict).toBeUndefined();
   });
 
-  it('concludes with a verdict, an embedded compare report, and a cost delta', async () => {
+  it('concludes with an embedded compare report + cost delta and no go/no-go verdict', async () => {
     const { id } = await post('/api/experiments', { question: 'Digest Sonnet → Haiku?' }, 201);
     const accepted = await post(`/api/experiments/${id}/report`, { baseline: 'baseline', candidate: 'haiku' }, 202);
     expect(accepted).toMatchObject({ experimentId: id, baseline: 'baseline', candidate: 'haiku' });
@@ -127,10 +128,11 @@ describe('experiments', () => {
 
     const detail = await get(`/api/experiments/${id}`);
     expect(detail.status).toBe('concluded');
-    // The mock judge passes every trace → no regressions → a GO verdict.
-    expect(detail.verdict).toBe('go');
+    // The mock judge passes every trace → no regressions. Data only, no verdict.
+    expect(detail.verdict).toBeUndefined();
     expect(detail.report.regressions).toBe(0);
-    expect(detail.report.summary).toContain('Suggested verdict: go');
+    expect(detail.report.summary).not.toMatch(/verdict/i);
+    expect(detail.report.summary).toContain('rule(s) held');
     // Sonnet 100k/20k ×2 = $1.20; Haiku ×2 = $0.40 → delta −0.80.
     expect(detail.report.costDeltaUsd).toBeCloseTo(-0.8, 5);
     expect(detail.report.compare.rules.length).toBeGreaterThanOrEqual(1);

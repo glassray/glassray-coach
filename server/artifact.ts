@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { CoachDb } from './bootstrap.js';
 import { flowSelectorSchema, parseSelector, type FlowSelector } from './classify.js';
 import { createFlow, updateFlow } from './flows.js';
-import { createManualEval, deleteEval } from './evals.js';
+import { createManualEval, deleteEval, sourceFromAnchors } from './evals.js';
 import { evals, flows } from './schema.js';
 
 /*
@@ -61,18 +61,27 @@ const artifactFlowSchema = z
     message: 'a flow needs a membership selector, a membership rule, or both',
   });
 
-/** One assertion rule in the artifact (== an eval on the target). */
+/** One code anchor: WHERE in the agent's repo a rule is enforced (cloud `FlowRule.anchors[]`). */
+export const anchorSchema = z.object({
+  file: z.string().trim().min(1).max(500),
+  symbol: z.string().trim().min(1).max(200).optional(),
+  line: z.number().int().min(0).optional(),
+});
+
+/** One assertion rule in the artifact (== an eval on the target) — mirrors cloud's canonical `FlowRule`. */
 const artifactRuleSchema = z.object({
   id: slugSchema,
   /** The flow slug this rule is scoped to; null/absent = global. */
   flow: slugSchema.nullish(),
-  /** Display label; defaults to the title-cased slug on create. */
-  label: z.string().trim().min(1).max(200).optional(),
+  /** Short plain-language title (cloud `FlowRule.name`); defaults to the title-cased slug on create. */
+  name: z.string().trim().min(1).max(200).optional(),
   description: z.string().max(2000).optional(),
-  /** The plain-language judged predicate (PASS/FAIL over one trace). */
-  predicate: z.string().trim().min(1).max(2000),
-  /** The repo path the expectation is written in (e.g. `watcher/digest.ts`); absent = custom (hand-written). */
-  source: z.string().trim().min(1).max(500).nullish(),
+  /** The plain-language judged predicate (PASS/FAIL over one trace) — cloud `FlowRule.text`. */
+  text: z.string().trim().min(1).max(2000),
+  /** Provenance (cloud `FlowRule.source`): `code` (read from a file anchor) or `promoted` (authored); absent = promoted. */
+  source: z.enum(['code', 'promoted']).nullish(),
+  /** WHERE in code the rule is enforced (cloud `FlowRule.anchors`); absent = authored/custom. */
+  anchors: z.array(anchorSchema).nullish(),
   /** Preferred judge model id; absent = the target's light-tier default. */
   judge: z.string().trim().min(1).max(200).nullish(),
   /** Pass-rate gate for `check` (0..1); absent = 1.0 (any failure breaches). */
@@ -94,7 +103,7 @@ export type Artifact = z.infer<typeof artifactSchema>;
 export type ArtifactFlow = z.infer<typeof artifactFlowSchema>;
 export type ArtifactRule = z.infer<typeof artifactRuleSchema>;
 
-/** Derive a kebab-case slug from a display name/label (fallback identity for never-exported rows). */
+/** Derive a kebab-case slug from a display name (fallback identity for never-exported rows). */
 export const slugify = (name: string): string => {
   const slug = name
     .toLowerCase()
@@ -142,7 +151,7 @@ export const exportArtifact = async (db: CoachDb): Promise<Artifact> => {
   const activeEvalRows = await db.select().from(evals).orderBy(evals.createdAt, evals.id);
 
   const flowSlugs = assignSlugs(flowRows, (r) => r.slug, (r) => r.name);
-  const ruleSlugs = assignSlugs(activeEvalRows, (r) => r.slug, (r) => r.label);
+  const ruleSlugs = assignSlugs(activeEvalRows, (r) => r.slug, (r) => r.name);
   for (const [row, slug] of flowSlugs) {
     if (row.slug !== slug) await db.update(flows).set({ slug }).where(eq(flows.id, row.id));
   }
@@ -165,10 +174,11 @@ export const exportArtifact = async (db: CoachDb): Promise<Artifact> => {
     rules: activeEvalRows.map((r) => ({
       id: ruleSlugs.get(r)!,
       ...(r.flowId !== null && flowSlugById.has(r.flowId) ? { flow: flowSlugById.get(r.flowId)! } : {}),
-      label: r.label,
+      name: r.name,
       ...(r.description ? { description: r.description } : {}),
-      predicate: r.rule,
-      ...(r.sourceFile !== null ? { source: r.sourceFile } : {}),
+      text: r.text,
+      source: r.source === 'code' ? 'code' : 'promoted',
+      ...(r.anchors !== null ? { anchors: r.anchors } : {}),
       ...(r.judgeModel !== null ? { judge: r.judgeModel } : {}),
       ...(r.threshold !== null ? { threshold: r.threshold } : {}),
     })),
@@ -244,7 +254,7 @@ const loadTarget = async (db: CoachDb): Promise<{ flows: SluggedFlow[]; rules: S
   const flowRows = await db.select().from(flows).orderBy(flows.createdAt, flows.id);
   const evalRows = await db.select().from(evals).orderBy(evals.createdAt, evals.id);
   const flowSlugs = assignSlugs(flowRows, (r) => r.slug, (r) => r.name);
-  const ruleSlugs = assignSlugs(evalRows, (r) => r.slug, (r) => r.label);
+  const ruleSlugs = assignSlugs(evalRows, (r) => r.slug, (r) => r.name);
   return {
     flows: flowRows.map((row) => ({ row, slug: flowSlugs.get(row)! })),
     rules: evalRows.map((row) => ({ row, slug: ruleSlugs.get(row)! })),
@@ -271,9 +281,14 @@ const diffFlow = (file: ArtifactFlow, target: SluggedFlow): string[] => {
 const diffRule = (file: ArtifactRule, target: SluggedEval, targetFlowSlugById: Map<string, string>): string[] => {
   const changes: string[] = [];
   const t = target.row;
-  if (file.predicate !== t.rule) changes.push('predicate');
-  if ((file.source ?? null) !== t.sourceFile) changes.push(`source ${t.sourceFile ?? '(custom)'}→${file.source ?? '(custom)'}`);
-  if (file.label !== undefined && file.label !== t.label) changes.push('label');
+  if (file.text !== t.text) changes.push('text');
+  // Location is carried by anchors; `source` (code|promoted) is derived from
+  // them, so comparing anchors captures a provenance change too.
+  const fileAnchors = file.anchors ?? null;
+  if (JSON.stringify(fileAnchors) !== JSON.stringify(t.anchors)) {
+    changes.push(`anchors ${t.anchors?.[0]?.file ?? '(custom)'}→${fileAnchors?.[0]?.file ?? '(custom)'}`);
+  }
+  if (file.name !== undefined && file.name !== t.name) changes.push('name');
   if (file.description !== undefined && file.description !== t.description) changes.push('description');
   if ((file.judge ?? null) !== t.judgeModel) changes.push(`judge ${t.judgeModel ?? '(default)'}→${file.judge ?? '(default)'}`);
   if ((file.threshold ?? null) !== t.threshold) changes.push(`threshold ${t.threshold ?? 1}→${file.threshold ?? 1}`);
@@ -407,27 +422,30 @@ export const applyImport = async (
     }
     if (action.op === 'create') {
       await createManualEval(db, {
-        label: rule.label ?? nameFromSlug(rule.id),
-        rule: rule.predicate,
+        name: rule.name ?? nameFromSlug(rule.id),
+        text: rule.text,
         description: rule.description,
         flowId: flowId ?? undefined,
-        sourceFile: rule.source ?? null,
+        anchors: rule.anchors ?? null,
         threshold: rule.threshold ?? undefined,
         judgeModel: rule.judge ?? undefined,
         slug: rule.id,
       });
     } else if (action.op === 'update') {
       const existing = targetRulesBySlug.get(rule.id)!;
+      const anchors = rule.anchors ?? null;
       await db
         .update(evals)
         .set({
-          rule: rule.predicate,
-          sourceFile: rule.source ?? null,
+          text: rule.text,
+          anchors,
+          // Provenance is derived from anchors (a file-anchored rule is `code`).
+          source: sourceFromAnchors(anchors),
           flowId: flowId ?? null,
           threshold: rule.threshold ?? null,
           judgeModel: rule.judge ?? null,
           slug: rule.id,
-          ...(rule.label !== undefined ? { label: rule.label } : {}),
+          ...(rule.name !== undefined ? { name: rule.name } : {}),
           ...(rule.description !== undefined ? { description: rule.description } : {}),
         })
         .where(eq(evals.id, existing.row.id));

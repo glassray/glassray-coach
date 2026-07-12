@@ -267,14 +267,21 @@ export interface FlowMember {
   assignedAt: string;
 }
 
+/** One code anchor: WHERE in the agent's repo a rule is enforced (cloud `FlowRule.anchors[]`). */
+export interface Anchor {
+  file: string;
+  symbol?: string;
+  line?: number;
+}
+
 /** An assertion rule attached to a flow, as listed in the flow's detail. */
 export interface FlowEvalRef {
   id: string;
-  label: string;
-  rule: string;
-  /** The repo path this rule's expectation is written in; null = custom (hand-written). */
-  sourceFile: string | null;
-  /** Provenance: `deviation` or `manual`. */
+  name: string;
+  text: string;
+  /** WHERE in code this rule is enforced (cloud `FlowRule.anchors`); null = authored/custom. */
+  anchors: Anchor[] | null;
+  /** Provenance (cloud `FlowRule.source`): `code` or `promoted`. */
   source: string;
   /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
   threshold: number | null;
@@ -331,16 +338,16 @@ export interface FlowAudit {
 /** One eval (assertion rule) + its latest-run rollup, as listed by GET /api/evals. */
 export interface EvalSummary {
   id: string;
-  label: string;
+  name: string;
   description: string;
-  rule: string;
-  /** Provenance: `deviation` (saved from a discovered type) or `manual`. */
+  text: string;
+  /** Provenance (cloud `FlowRule.source`): `code` (read from a file anchor) or `promoted` (authored). */
   source: string;
   sourceDeviationId: string | null;
   /** The flow this eval is scoped to (runs sample its members); null = global. */
   flowId: string | null;
-  /** The repo path this rule's expectation is written in; null = custom (hand-written). */
-  sourceFile: string | null;
+  /** WHERE in code this rule is enforced (cloud `FlowRule.anchors`); null = authored/custom. */
+  anchors: Anchor[] | null;
   /** New member traces (since the last run) needed to trigger an automatic rerun of a flow-scoped rule. */
   autorunThreshold: number;
   /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
@@ -658,24 +665,24 @@ export const resolveDeviation = (id: string): Promise<{ status: string }> =>
 export const reopenDeviation = (id: string): Promise<{ status: string }> =>
   postJson<{ status: string }>(`/api/deviations/${encodeURIComponent(id)}/reopen`);
 
-/** Create a hand-written rule from a label + rule text (+ optional flow scope / source file / gate tuning) (POST /api/evals). */
+/** Create a hand-written rule from a name + text predicate (+ optional flow scope / code anchors / gate tuning) (POST /api/evals). */
 export const createEval = (input: {
-  label: string;
-  rule: string;
+  name: string;
+  text: string;
   description?: string;
   flowId?: string;
-  sourceFile?: string | null;
+  anchors?: Anchor[] | null;
   autorunThreshold?: number;
   threshold?: number;
   judgeModel?: string;
 }): Promise<{ id: string }> => postJson<{ id: string }>("/api/evals", input);
 
-/** Patch a rule's flow binding / source file / gate tuning and get the fresh detail back (PATCH /api/evals/:id). */
+/** Patch a rule's flow binding / code anchors / gate tuning and get the fresh detail back (PATCH /api/evals/:id). */
 export const updateEval = (
   id: string,
   patch: {
     flowId?: string | null;
-    sourceFile?: string | null;
+    anchors?: Anchor[] | null;
     autorunThreshold?: number;
     threshold?: number | null;
     judgeModel?: string | null;
@@ -700,7 +707,7 @@ export type CorpusRef = { traceIds: string[] } | { label: string } | { agent: st
 export interface CompareRuleResult {
   id: string;
   slug: string | null;
-  label: string;
+  name: string;
   baseline: { scored: number; passed: number; failed: number; passRate: number | null };
   candidate: { scored: number; passed: number; failed: number; passRate: number | null };
   /** candidate − baseline pass rate; null when either side scored nothing. */
@@ -758,9 +765,8 @@ export interface ExperimentFailingRule {
   candidateScored: number;
 }
 
-/** The generated experiment report: the compare result + prose + suggested verdict. */
+/** The generated experiment report: the compare result + prose (data only — no go/no-go call). */
 export interface ExperimentReport {
-  verdict: "go" | "no-go" | "undecided";
   summary: string;
   regressions: number;
   costDeltaUsd: number;
@@ -775,7 +781,6 @@ export interface Experiment {
   flowId: string | null;
   question: string;
   status: "open" | "running" | "concluded";
-  verdict: "go" | "no-go" | "undecided" | null;
   baselineLabel: string | null;
   candidateLabel: string | null;
   runId: string | null;

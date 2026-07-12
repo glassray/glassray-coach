@@ -36,7 +36,7 @@ const USAGE = {
   flows:
     "glassray flows list [--status active|archived|all] | get <id> | create --name <s> [--description <s>] [--rule <s>] [--classify selector|llm] [--selector '<json>'] [--created-by user|claude] | update <id> [--name <s>] [--description <s>] [--rule <s>|--no-rule] [--classify selector|llm] [--selector '<json>'|--no-selector] [--status active|archived] | delete <id> | audit <id> | discover [--no-wait] [--timeout <s>]",
   evals:
-    'glassray evals list | get <id> | create (--deviation <id> [--flow <id>]) or (--label <s> --rule <s> [--description <s>] [--flow <id>] [--source-file <path>] [--threshold <0..1>] [--judge <model>] [--autorun-threshold <n>]) | update <id> [--flow <id>|--no-flow] [--source-file <path>|--no-source-file] [--threshold <0..1>|--no-threshold] [--judge <model>|--no-judge] [--autorun-threshold <n>] | run <id> [--sample <n>] [--model <s>] [--no-wait] [--timeout <s>] | delete <id>',
+    'glassray evals list | get <id> | create (--deviation <id> [--flow <id>]) or (--name <s> --text <s> [--description <s>] [--flow <id>] [--source-file <path>] [--threshold <0..1>] [--judge <model>] [--autorun-threshold <n>]) | update <id> [--flow <id>|--no-flow] [--source-file <path>|--no-source-file] [--threshold <0..1>|--no-threshold] [--judge <model>|--no-judge] [--autorun-threshold <n>] | run <id> [--sample <n>] [--model <s>] [--no-wait] [--timeout <s>] | delete <id>',
   deviations: 'glassray deviations list | get <id> | resolve <id> [--reopen]',
   discovery: 'glassray discovery run [--sample <n>] [--flow <id>] [--no-wait] [--timeout <s>]',
   fix: 'glassray fix <deviationId> [--no-wait] [--timeout <s>]',
@@ -470,8 +470,8 @@ export const cmdEvals = async ({ port, args }) => {
       const { values } = parseFlags('evals', args.slice(1), {
         deviation: { type: 'string' },
         flow: { type: 'string' },
-        label: { type: 'string' },
-        rule: { type: 'string' },
+        name: { type: 'string' },
+        text: { type: 'string' },
         description: { type: 'string' },
         'source-file': { type: 'string' },
         threshold: { type: 'string' },
@@ -481,24 +481,25 @@ export const cmdEvals = async ({ port, args }) => {
       let body;
       if (values.deviation !== undefined) {
         if (
-          values.label !== undefined ||
-          values.rule !== undefined ||
+          values.name !== undefined ||
+          values.text !== undefined ||
           values.description !== undefined ||
           values['source-file'] !== undefined ||
           values.threshold !== undefined ||
           values.judge !== undefined ||
           values['autorun-threshold'] !== undefined
         ) {
-          usageFail('evals', '--deviation only combines with --flow (the deviation supplies the label/rule; it lands as a custom rule)');
+          usageFail('evals', '--deviation only combines with --flow (the deviation supplies the name/text; it lands as a promoted rule)');
         }
         body = { deviationId: values.deviation };
       } else {
-        if (values.label === undefined || values.rule === undefined) {
-          usageFail('evals', 'create needs --deviation <id>, or both --label and --rule');
+        if (values.name === undefined || values.text === undefined) {
+          usageFail('evals', 'create needs --deviation <id>, or both --name and --text');
         }
-        body = { label: values.label, rule: values.rule };
+        body = { name: values.name, text: values.text };
         if (values.description !== undefined) body.description = values.description;
-        if (values['source-file'] !== undefined) body.sourceFile = values['source-file'];
+        // A --source-file path becomes the rule's single code anchor (source: 'code').
+        if (values['source-file'] !== undefined) body.anchors = [{ file: values['source-file'] }];
         if (values.threshold !== undefined) body.threshold = toRate('evals', 'threshold', values.threshold);
         if (values.judge !== undefined) body.judgeModel = values.judge;
         if (values['autorun-threshold'] !== undefined) {
@@ -532,8 +533,8 @@ export const cmdEvals = async ({ port, args }) => {
       const body = {};
       if (values.flow !== undefined) body.flowId = values.flow;
       if (values['no-flow']) body.flowId = null;
-      if (values['source-file'] !== undefined) body.sourceFile = values['source-file'];
-      if (values['no-source-file']) body.sourceFile = null;
+      if (values['source-file'] !== undefined) body.anchors = [{ file: values['source-file'] }];
+      if (values['no-source-file']) body.anchors = null;
       if (values.threshold !== undefined) body.threshold = toRate('evals', 'threshold', values.threshold);
       if (values['no-threshold']) body.threshold = null;
       if (values.judge !== undefined) body.judgeModel = values.judge;
@@ -1048,7 +1049,7 @@ export const cmdCheck = async ({ port, args }) => {
   const evalList = await api(port, '/api/evals');
   const suite = evalList.items;
   if (suite.length === 0) {
-    return fail('no rules to check — add a rule first (glassray evals create --label <s> --rule <s>)');
+    return fail('no rules to check — add a rule first (glassray evals create --name <s> --text <s>)');
   }
 
   // Fixtures mode: re-ingest the committed set, then pin each rule's corpus to it.
@@ -1076,8 +1077,8 @@ export const cmdCheck = async ({ port, args }) => {
       const ids = slug !== null && slug !== undefined ? (fixtureIds.bySlug.get(slug) ?? []) : fixtureIds.all;
       if (ids.length === 0) {
         breaches += 1;
-        results.push({ id: rule.id, slug: rule.slug, label: rule.label, scored: 0, passed: 0, failed: 0, passRate: null, threshold: rule.threshold ?? 1, breach: true, reason: 'no fixtures for this rule’s flow' });
-        console.error(`${cross()} ${rule.label} — no fixtures for its flow (expected ${path.join(values.dir ?? FIXTURES_DIR, slug ?? '<flow>')})`);
+        results.push({ id: rule.id, slug: rule.slug, name: rule.name, scored: 0, passed: 0, failed: 0, passRate: null, threshold: rule.threshold ?? 1, breach: true, reason: 'no fixtures for this rule’s flow' });
+        console.error(`${cross()} ${rule.name} — no fixtures for its flow (expected ${path.join(values.dir ?? FIXTURES_DIR, slug ?? '<flow>')})`);
         continue;
       }
       body.traceIds = ids;
@@ -1092,9 +1093,9 @@ export const cmdCheck = async ({ port, args }) => {
     // Nothing scored is a breach too: a gate that silently checks nothing isn't a gate.
     const breach = passRate === null || passRate < threshold;
     if (breach) breaches += 1;
-    results.push({ id: rule.id, slug: rule.slug, label: rule.label, scored, passed, failed, passRate, threshold, breach });
+    results.push({ id: rule.id, slug: rule.slug, name: rule.name, scored, passed, failed, passRate, threshold, breach });
     const pct = passRate === null ? 'nothing scored' : `${passed}/${scored} passing (${Math.round(passRate * 100)}%)`;
-    console.error(`${breach ? cross() : '✓'} ${rule.label} — ${pct}, gate ≥${Math.round(threshold * 100)}%`);
+    console.error(`${breach ? cross() : '✓'} ${rule.name} — ${pct}, gate ≥${Math.round(threshold * 100)}%`);
   }
 
   printJson({ rules: results, breaches, corpus: values.fixtures ? 'fixtures' : 'live' });
@@ -1147,7 +1148,7 @@ const printCompareSummary = (stats) => {
       typeof rule.deltaPassRate === 'number'
         ? ` (${rule.deltaPassRate >= 0 ? '+' : ''}${Math.round(rule.deltaPassRate * 100)}pts)`
         : '';
-    console.error(`${rule.regressed ? cross() : '✓'} ${rule.label}: ${pct(rule.baseline?.passRate)} → ${pct(rule.candidate?.passRate)}${delta}`);
+    console.error(`${rule.regressed ? cross() : '✓'} ${rule.name}: ${pct(rule.baseline?.passRate)} → ${pct(rule.candidate?.passRate)}${delta}`);
   }
   const money = (v) => (typeof v === 'number' ? `$${v.toFixed(4)}` : '—');
   if (stats.baseline && stats.candidate) {

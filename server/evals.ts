@@ -6,7 +6,7 @@ import { finishRun, failRun, isRunLive, judgeInWaves, renderTraceView } from './
 import { resolveLlmConfig } from './llm.js';
 import { generateStructuredTracked } from './usage.js';
 import { newId } from './ids.js';
-import { deviations, evalResults, evals, flowTraces, flows, runs, traces } from './schema.js';
+import { deviations, evalResults, evals, flowTraces, flows, runs, traces, type Anchor } from './schema.js';
 import { buildTraceView } from './vendor/index.js';
 
 /*
@@ -35,18 +35,23 @@ const EvalVerdictSchema = z.object({
 /** Default number of traces scored per eval run. */
 const DEFAULT_EVAL_SAMPLE = 20;
 
-/** A stored eval (assertion rule) with its rule + provenance + flow scoping + source file. */
+/** Derive cloud `FlowRule.source` provenance from anchors: a file-anchored rule is read-from-`code`, else authored (`promoted`). */
+export const sourceFromAnchors = (anchors: Anchor[] | null | undefined): 'code' | 'promoted' =>
+  anchors && anchors.length > 0 ? 'code' : 'promoted';
+
+/** A stored eval (assertion rule) — mirrors cloud `FlowRule`: name (title) + text (predicate) + provenance + anchors + flow scoping. */
 export type EvalRecord = {
   id: string;
-  label: string;
+  name: string;
   description: string;
-  rule: string;
+  text: string;
+  /** Provenance (cloud `FlowRule.source`): `code` (read from a file anchor) or `promoted` (authored). */
   source: string;
   sourceDeviationId: string | null;
   /** The flow this eval is scoped to (runs sample its members); null = global. */
   flowId: string | null;
-  /** The repo path this rule's expectation is written in; null = custom (hand-written). */
-  sourceFile: string | null;
+  /** WHERE in code this rule is enforced (cloud `FlowRule.anchors`); Coach populates only `file`. Null = authored/custom. */
+  anchors: Anchor[] | null;
   /** New member traces (since the last run) needed to trigger an automatic rerun of a watched rule. */
   autorunThreshold: number;
   /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
@@ -91,10 +96,10 @@ export type EvalRunPoint = { runId: string; at: Date | null; passed: number; fai
 export type EvalDetail = EvalSummary & { results: EvalResultRow[]; history: EvalRunPoint[] };
 
 /**
- * Create an eval from a discovered deviation — copies its label / description /
- * rule. Idempotent: if an eval was already saved from this deviation, its id is
- * returned instead of creating a duplicate. Returns null if the deviation no
- * longer exists.
+ * Create an eval from a discovered deviation — copies its title / description /
+ * predicate. Idempotent: if an eval was already saved from this deviation, its
+ * id is returned instead of creating a duplicate. Returns null if the deviation
+ * no longer exists.
  */
 export const createEvalFromDeviation = async (
   db: CoachDb,
@@ -118,32 +123,32 @@ export const createEvalFromDeviation = async (
     return already[0].id;
   }
   const id = newId('eval_');
-  // A deviation-promoted rule is CUSTOM (no source file) — it wasn't derived
-  // from a specific line of code. Every rule is active from the moment it lands.
+  // A deviation-promoted rule is AUTHORED (`source: 'promoted'`, no anchors) — it
+  // wasn't read from a specific line of code. Every rule is active from the moment it lands.
   await db.insert(evals).values({
     id,
-    label: dev.label,
+    name: dev.label,
     description: dev.description,
-    rule: dev.rule,
-    source: 'deviation',
+    text: dev.rule,
+    source: 'promoted',
     sourceDeviationId: dev.id,
     flowId: opts?.flowId ?? null,
-    sourceFile: null,
+    anchors: null,
     state: 'active',
   });
   return id;
 };
 
-/** Create a hand-written eval from a label + rule (+ optional description / flow scope / source file / gate tuning). Returns the new eval id. */
+/** Create a hand-written eval from a name + text (+ optional description / flow scope / code anchors / gate tuning). Returns the new eval id. */
 export const createManualEval = async (
   db: CoachDb,
   input: {
-    label: string;
-    rule: string;
+    name: string;
+    text: string;
     description?: string;
     flowId?: string;
-    /** The repo path this rule is derived from; omitted/null = custom (hand-written). */
-    sourceFile?: string | null;
+    /** WHERE in code this rule is enforced; supplying anchors makes it `source: 'code'`, omitting them `source: 'promoted'`. */
+    anchors?: Anchor[] | null;
     autorunThreshold?: number;
     threshold?: number;
     judgeModel?: string;
@@ -151,15 +156,16 @@ export const createManualEval = async (
   },
 ): Promise<string> => {
   const id = newId('eval_');
+  const anchors = input.anchors ?? null;
   await db.insert(evals).values({
     id,
-    label: input.label,
+    name: input.name,
     description: input.description ?? '',
-    rule: input.rule,
-    source: 'manual',
+    text: input.text,
+    source: sourceFromAnchors(anchors),
     sourceDeviationId: null,
     flowId: input.flowId ?? null,
-    sourceFile: input.sourceFile ?? null,
+    anchors,
     state: 'active',
     ...(input.autorunThreshold !== undefined ? { autorunThreshold: input.autorunThreshold } : {}),
     ...(input.threshold !== undefined ? { threshold: input.threshold } : {}),
@@ -169,20 +175,23 @@ export const createManualEval = async (
   return id;
 };
 
-/** Patch shape for an eval: flow binding, source file, and gate tuning (the rule text itself is immutable). */
+/** Patch shape for an eval: flow binding, code anchors, and gate tuning (the rule text itself is immutable). */
 export type EvalPatch = {
   flowId?: string | null;
-  sourceFile?: string | null;
+  anchors?: Anchor[] | null;
   autorunThreshold?: number;
   threshold?: number | null;
   judgeModel?: string | null;
 };
 
-/** Patch an eval's flow binding / source file / gate tuning. Returns false when the eval doesn't exist. */
+/** Patch an eval's flow binding / code anchors / gate tuning. Setting anchors re-derives `source`. Returns false when the eval doesn't exist. */
 export const updateEval = async (db: CoachDb, id: string, patch: EvalPatch): Promise<boolean> => {
   const set: Partial<typeof evals.$inferInsert> = {};
   if (patch.flowId !== undefined) set.flowId = patch.flowId;
-  if (patch.sourceFile !== undefined) set.sourceFile = patch.sourceFile;
+  if (patch.anchors !== undefined) {
+    set.anchors = patch.anchors;
+    set.source = sourceFromAnchors(patch.anchors);
+  }
   if (patch.autorunThreshold !== undefined) set.autorunThreshold = patch.autorunThreshold;
   if (patch.threshold !== undefined) set.threshold = patch.threshold;
   if (patch.judgeModel !== undefined) set.judgeModel = patch.judgeModel;
@@ -276,7 +285,7 @@ export const runEval = async (
       const { object } = await generateStructuredTracked(db, 'eval', {
         schema: EvalVerdictSchema,
         system: EVAL_SYSTEM_PROMPT,
-        prompt: `Rule the agent should follow:\n"${ev.rule}"\n\nDoes the following trace COMPLY with that rule (pass) or VIOLATE it (fail)? Judge only against the rule above.\n\n${block}`,
+        prompt: `Rule the agent should follow:\n"${ev.text}"\n\nDoes the following trace COMPLY with that rule (pass) or VIOLATE it (fail)? Judge only against the rule above.\n\n${block}`,
         tier: 'light',
         model: judgeModel,
         temperature: 0,

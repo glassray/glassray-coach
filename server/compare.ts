@@ -70,7 +70,7 @@ type CorpusStats = {
 type RuleComparison = {
   id: string;
   slug: string | null;
-  label: string;
+  name: string;
   baseline: { scored: number; passed: number; failed: number; passRate: number | null };
   candidate: { scored: number; passed: number; failed: number; passRate: number | null };
   /** candidate − baseline pass rate; null when either side scored nothing. */
@@ -220,7 +220,7 @@ export const runCompare = async (
       const { object } = await generateStructuredTracked(db, 'compare', {
         schema: CompareVerdictSchema,
         system: COMPARE_SYSTEM_PROMPT,
-        prompt: `Rule the agent should follow:\n"${rule.rule}"\n\nDoes the following trace COMPLY with that rule (pass) or VIOLATE it (fail)? Judge only against the rule above.\n\n${block}`,
+        prompt: `Rule the agent should follow:\n"${rule.text}"\n\nDoes the following trace COMPLY with that rule (pass) or VIOLATE it (fail)? Judge only against the rule above.\n\n${block}`,
         tier: 'light',
         model: rule.judgeModel ?? lightModel,
         temperature: 0,
@@ -245,7 +245,7 @@ export const runCompare = async (
       return {
         id: rule.id,
         slug: rule.slug,
-        label: rule.label,
+        name: rule.name,
         baseline: b,
         candidate: c,
         deltaPassRate: delta,

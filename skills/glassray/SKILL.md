@@ -57,9 +57,10 @@ This is what cloud Glassray does from production traffic; you do it from code:
 2. **Derive rules from the prompt's implicit contract.** Every constraint the
    system prompt states or assumes is a candidate assertion rule — "always
    answer in English", "factual, never invent", "topic is a 1-4 word label".
-   Every rule is active; tie each to the file its expectation is written in via
-   `source:` (e.g. `watcher/digest.ts`). A rule you can't tie to a file is
-   custom (omit `source`). Acceptance is the git review of `glassray.yaml`.
+   Every rule is active; tie each to the file its expectation is written in with
+   an `anchors:` entry (e.g. `watcher/digest.ts`) — that makes it `source: code`.
+   A rule you can't tie to a file is authored/custom (omit `anchors`, `source:
+   promoted`). Acceptance is the git review of `glassray.yaml`.
 3. **Author `glassray.yaml`** — the flow (membership selector = the agent
    name), the rules, and the local-only `run` recipe:
 
@@ -76,12 +77,14 @@ flows:
 rules:
   - id: english-summary
     flow: digest
-    predicate: PASS if the summary is plain English and invents nothing not in the input.
-    source: src/digest.ts          # the file the expectation lives in (omit = custom)
+    text: PASS if the summary is plain English and invents nothing not in the input.
+    anchors:
+      - file: src/digest.ts        # WHERE the expectation lives (omit = authored/custom)
   - id: topic-sensible
     flow: digest
-    predicate: PASS if `topic` is a sensible 1-4 word English label.
-    source: src/digest.ts
+    text: PASS if `topic` is a sensible 1-4 word English label.
+    anchors:
+      - file: src/digest.ts
 ```
 
 4. **Write the runner** (`run.command`). It must: read every input file in
@@ -162,12 +165,12 @@ Audit your own hypotheses periodically:
 
 ```sh
 glassray flows audit <id>     # members that don't belong → tighten the selector
-glassray evals get <id>       # verdicts flip-flopping on unchanged behaviour → sharpen the predicate
+glassray evals get <id>       # verdicts flip-flopping on unchanged behaviour → sharpen the rule text
 ```
 
-A vague rule gets rewritten by editing its `predicate` in `glassray.yaml` and
+A vague rule gets rewritten by editing its `text` in `glassray.yaml` and
 `glassray push` (the plan shows `~ update`). `glassray evals update` moves flow
-binding, `--source-file`, and gate tuning only.
+binding, `--source-file` (the rule's code anchor), and gate tuning only.
 
 ## 7 · Reference
 
@@ -199,10 +202,10 @@ Data + rules:
 | `glassray traces list [--q --agent --status --flow --label --limit --offset]` / `get <id>` / `tail` | `--label` filters one run's corpus. |
 | `glassray stats` / `glassray usage` | Rollups incl. `estCostIfMeteredUsd`; Coach's own LLM spend. |
 | `glassray flows list/get/create/update/delete/audit/discover` | Durable flows; `audit` = classification quality. |
-| `glassray evals list` / `get <id>` | Rules with `sourceFile`, gate `threshold`, latest verdicts + history. |
-| `glassray evals create --label --rule [--flow --source-file --threshold --judge --autorun-threshold]` | Hand-written rule (custom unless `--source-file`). |
-| `glassray evals create --deviation <id> [--flow]` | Save a discovered deviation as a **custom** rule (idempotent). |
-| `glassray evals update <id> [--flow\|--no-flow --source-file --threshold\|--no-threshold --judge\|--no-judge --autorun-threshold]` | Binding + source + gates. |
+| `glassray evals list` / `get <id>` | Rules with `name`, `text`, `anchors` (+ `source` code\|promoted), gate `threshold`, latest verdicts + history. |
+| `glassray evals create --name --text [--flow --source-file --threshold --judge --autorun-threshold]` | Hand-written rule (authored/promoted unless `--source-file` sets a code anchor). |
+| `glassray evals create --deviation <id> [--flow]` | Save a discovered deviation as an authored (**promoted**) rule (idempotent). |
+| `glassray evals update <id> [--flow\|--no-flow --source-file --threshold\|--no-threshold --judge\|--no-judge --autorun-threshold]` | Binding + anchor + gates. |
 | `glassray evals run <id> [--sample --model]` / `delete <id>` | One-off scoring; delete removes verdicts. |
 | `glassray deviations list/get/resolve` · `discovery run` · `fix <id>` | The discovery → fix loop (secondary to the rule loop). |
 | `glassray runs list/get/cancel` | Background-run queue visibility. |

@@ -181,7 +181,7 @@ describe('run labels (1.3)', () => {
 
 describe('compare by label + the cost fix (1.4)', () => {
   it('resolves { label } corpora and prices both sides through the price book', async () => {
-    await post('/api/evals', { label: 'English summary', rule: 'PASS if plain English.', state: 'watched' }, 201);
+    await post('/api/evals', { name: 'English summary', text: 'PASS if plain English.' }, 201);
     const accepted = await post(
       '/api/compare',
       { baseline: { label: 'baseline' }, candidate: { label: 'haiku' } },
@@ -286,7 +286,7 @@ describe('compare CLI label resolution (1.4)', () => {
     const flowId = (
       await post('/api/flows', { name: 'Digest', selector: { agent: 'digest-bot' } }, 201)
     ).id;
-    await post('/api/evals', { label: 'Digest rule', rule: 'PASS always.', flowId, state: 'watched' }, 201);
+    await post('/api/evals', { name: 'Digest rule', text: 'PASS always.', flowId }, 201);
     const res = await runCli(['compare', 'digest', 'baseline', 'haiku'], workDir);
     expect(res.status).toBe(0);
     const run = JSON.parse(res.stdout);

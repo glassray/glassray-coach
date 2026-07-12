@@ -75,7 +75,7 @@ export const CompareReportView = ({ report, flows }: { report: CompareReport; fl
             <tr key={r.id} className={`row${r.regressed ? " row-error" : ""}`}>
               <td>
                 <a className="cell-name cell-link" href={`#/eval/${encodeURIComponent(r.id)}`}>
-                  {r.label}
+                  {r.name}
                 </a>
               </td>
               <td className="col-num mono">

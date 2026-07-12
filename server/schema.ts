@@ -1,5 +1,11 @@
 import { doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
 
+/**
+ * WHERE in the agent's code a rule is enforced — mirrors cloud `FlowRule.anchors`.
+ * Coach only populates `file`; `symbol`/`line` are carried for artifact fidelity.
+ */
+export type Anchor = { file: string; symbol?: string; line?: number };
+
 /** One row per trace, keyed by the 32-hex OTLP traceId; `raw` holds the full envelope, the rest are denormalized display fields. */
 export const traces = pgTable('traces', {
   /** 32-char lowercase hex OTLP trace id. */
@@ -131,28 +137,30 @@ export const flowTraces = pgTable(
 
 /**
  * An assertion RULE over a flow's traces — a repeatable pass/fail check built
- * from a plain-language `rule` (saved from a deviation, or hand-written).
- * Historically "evals"; the table name stays for datadir compatibility. Every
- * rule is active — it gates `check` and runs in `compare`. Provenance is
- * `sourceFile`: the repo path the expectation is written in (null = custom,
- * hand-written and not tied to a file). Acceptance is git review of
- * `glassray.yaml`, not an in-app promote.
+ * from a plain-language `text` predicate (saved from a deviation, or
+ * hand-written). Historically "evals"; the table name stays for datadir
+ * compatibility. Every rule is active — it gates `check` and runs in `compare`.
+ * Field names/meanings mirror cloud's canonical `FlowRule` primitive: `name`
+ * (title), `text` (the judged predicate), `source` (`code` = read from a file
+ * anchor, `promoted` = authored), and `anchors` (WHERE in code it's enforced).
+ * Acceptance is git review of `glassray.yaml`, not an in-app promote.
  */
 export const evals = pgTable('evals', {
   /** Prefixed random-hex id (`eval_…`). */
   id: text('id').primaryKey(),
-  label: text('label').notNull(),
+  /** Short plain-language TITLE of the rule (cloud `FlowRule.name`). */
+  name: text('name').notNull(),
   description: text('description').notNull(),
-  /** The plain-language rule each trace is scored against (pass = complies, fail = violates). */
-  rule: text('rule').notNull(),
-  /** Provenance: `deviation` (saved from a discovered type) or `manual` (hand-written). */
+  /** The plain-language rule each trace is scored against (pass = complies, fail = violates) — cloud `FlowRule.text`. */
+  text: text('text').notNull(),
+  /** Provenance (cloud `FlowRule.source`): `code` (read from a file anchor) or `promoted` (authored). */
   source: text('source').notNull(),
-  /** The deviation this eval was saved from, when `source = 'deviation'`. */
+  /** The deviation this eval was promoted from, when it began as a discovered type. */
   sourceDeviationId: text('source_deviation_id'),
   /** The flow this eval is scoped to (runs sample that flow's members); null = global (newest traces store-wide). */
   flowId: text('flow_id'),
-  /** The repo path the expectation is written in (e.g. `watcher/digest.ts`); null = custom (hand-written). */
-  sourceFile: text('source_file'),
+  /** WHERE in code the rule is enforced (cloud `FlowRule.anchors`); Coach populates only `file`. Null = authored/custom. */
+  anchors: jsonb('anchors').$type<Anchor[]>(),
   /** VESTIGIAL: the retired lifecycle column, kept to avoid a destructive migration. Set to a constant on insert; never read for gating. */
   state: text('state').notNull().default('active'),
   /** How many new member traces (since the last run) trigger an automatic rerun of a watched rule. */

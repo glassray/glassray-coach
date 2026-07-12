@@ -107,10 +107,10 @@ beforeAll(async () => {
   ).id;
   await post(
     '/api/evals',
-    { label: 'English summary', rule: 'PASS if plain English.', flowId, sourceFile: 'src/digest.ts', threshold: 0.95, judgeModel: 'judge-x' },
+    { name: 'English summary', text: 'PASS if plain English.', flowId, anchors: [{ file: 'src/digest.ts' }], threshold: 0.95, judgeModel: 'judge-x' },
     201,
   );
-  await post('/api/evals', { label: 'Topic sensible', rule: 'PASS if topic sensible.', flowId }, 201);
+  await post('/api/evals', { name: 'Topic sensible', text: 'PASS if topic sensible.', flowId }, 201);
 }, 120_000);
 
 afterAll(async () => {
@@ -119,7 +119,7 @@ afterAll(async () => {
 });
 
 describe('artifact export', () => {
-  it('serializes flows + rules with stable slugs, source files, judges, and thresholds', async () => {
+  it('serializes flows + rules with stable slugs, anchors, judges, and thresholds', async () => {
     const { artifact, yaml } = await get('/api/export');
     expect(artifact.version).toBe(1);
     expect(artifact.flows).toHaveLength(1);
@@ -131,13 +131,15 @@ describe('artifact export', () => {
     const bySlug = new Map(artifact.rules.map((r: any) => [r.id, r]));
     expect(bySlug.get('english-summary')).toMatchObject({
       flow: 'trace-digest',
-      source: 'src/digest.ts',
+      source: 'code',
+      anchors: [{ file: 'src/digest.ts' }],
       judge: 'judge-x',
       threshold: 0.95,
-      predicate: 'PASS if plain English.',
+      text: 'PASS if plain English.',
     });
-    // A custom (hand-written) rule carries no source.
-    expect((bySlug.get('topic-sensible') as any).source).toBeUndefined();
+    // A custom (hand-written) rule is authored (`promoted`) and carries no anchors.
+    expect((bySlug.get('topic-sensible') as any).source).toBe('promoted');
+    expect((bySlug.get('topic-sensible') as any).anchors).toBeUndefined();
     expect(yaml).toContain('id: english-summary');
 
     // Export stamped the derived slugs back onto the rows (durable identity).
@@ -154,17 +156,17 @@ describe('artifact import (push)', () => {
     expect(plan.summary).toMatchObject({ create: 0, update: 0, prune: 0 });
   });
 
-  it('plans and applies create / update / source changes, then converges to noop', async () => {
+  it('plans and applies create / update / anchor changes, then converges to noop', async () => {
     const { artifact } = await get('/api/export');
     const english = artifact.rules.find((r: any) => r.id === 'english-summary');
     const topic = artifact.rules.find((r: any) => r.id === 'topic-sensible');
     english.threshold = 1;
-    topic.source = 'src/topic.ts'; // custom → file-linked is an ordinary update
+    topic.anchors = [{ file: 'src/topic.ts' }]; // custom → file-anchored is an ordinary update
     artifact.rules.push({
       id: 'language-correct',
       flow: 'trace-digest',
-      predicate: 'PASS if the language code is right.',
-      source: 'src/digest.ts',
+      text: 'PASS if the language code is right.',
+      anchors: [{ file: 'src/digest.ts' }],
     });
 
     const plan = await post('/api/import', { artifact, apply: false });
@@ -177,8 +179,9 @@ describe('artifact import (push)', () => {
     const evalsList = await get('/api/evals');
     const byLabel = new Map<string, any>(evalsList.items.map((e: any) => [e.slug, e]));
     expect(byLabel.get('english-summary').threshold).toBe(1);
-    expect(byLabel.get('topic-sensible').sourceFile).toBe('src/topic.ts');
-    expect(byLabel.get('language-correct')).toMatchObject({ sourceFile: 'src/digest.ts', flowId });
+    expect(byLabel.get('topic-sensible').anchors).toEqual([{ file: 'src/topic.ts' }]);
+    expect(byLabel.get('topic-sensible').source).toBe('code');
+    expect(byLabel.get('language-correct')).toMatchObject({ anchors: [{ file: 'src/digest.ts' }], source: 'code', flowId });
 
     // Idempotent: a second apply of the same file is all-noop.
     const replan = await post('/api/import', { artifact, apply: false });
@@ -221,7 +224,7 @@ describe('artifact import (push)', () => {
         },
       ],
       rules: [
-        { id: 'new-rule', flow: 'new-flow', predicate: 'PASS always.', source: 'src/new.ts' },
+        { id: 'new-rule', flow: 'new-flow', text: 'PASS always.', anchors: [{ file: 'src/new.ts' }] },
       ],
     };
     const applied = await post('/api/import', { artifact: file, apply: true });
@@ -341,13 +344,13 @@ describe('compare', () => {
 });
 
 describe('rule source', () => {
-  it('a deviation saved as a rule lands custom (no source file), active', async () => {
+  it('a deviation saved as a rule lands authored (promoted, no anchors), active', async () => {
     const disc = await post('/api/discovery/run', {}, 202);
     expect((await waitForRun(disc.runId)).status).toBe('done');
     const deviation = (await get('/api/deviations')).items[0];
     const { id } = await post('/api/evals', { deviationId: deviation.id }, 201);
     const detail = await get(`/api/evals/${id}`);
-    expect(detail.sourceFile).toBeNull();
-    expect(detail.source).toBe('deviation');
+    expect(detail.anchors).toBeNull();
+    expect(detail.source).toBe('promoted');
   });
 });

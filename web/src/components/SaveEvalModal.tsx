@@ -53,8 +53,8 @@ export const SaveEvalModal = ({
     setError(null);
     try {
       const { id } = await createEval({
-        label: label.trim(),
-        rule: rule.trim(),
+        name: label.trim(),
+        text: rule.trim(),
         flowId: flowId || undefined,
       });
       window.location.hash = `#/eval/${encodeURIComponent(id)}`;

@@ -3,11 +3,11 @@ import type { Experiment, FlowSummary } from "../api";
 import { fetchExperiment, fetchFlows, fetchRun, isNotFoundError, runExperimentReport } from "../api";
 import { relativeTime } from "../format";
 import { CompareReportView } from "./Compare";
-import { VerdictBadge } from "./Experiments";
+import { OutcomeChip } from "./Experiments";
 
 /*
  * EXPERIMENT DETAIL (#/experiment/:id) — one experiment's report: the question,
- * the verdict, the compare table (per-rule pass-rate deltas + cost-if-metered),
+ * the outcome, the compare table (per-rule pass-rate deltas + cost-if-metered),
  * and the generated prose + failing examples. Reuses CompareReportView so the
  * report renders identically to a live compare. A never-run experiment can be
  * concluded from here.
@@ -77,7 +77,7 @@ export const ExperimentDetail = ({ id }: { id: string }) => {
           </a>
           <h1 className="page-title">{exp.question}</h1>
           <p className="muted exp-detail-meta">
-            <VerdictBadge exp={exp} />
+            <OutcomeChip exp={exp} />
             {flowName ? <span className="tag">{flowName}</span> : <span className="muted">global rules</span>}
             {exp.baselineLabel && exp.candidateLabel ? (
               <span className="mono muted">

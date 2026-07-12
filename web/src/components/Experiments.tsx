@@ -11,15 +11,15 @@ import { DeltaChip } from "./Compare";
  * lives on the detail page (#/experiment/:id).
  */
 
-/** A verdict/status badge for an experiment card. */
-export const VerdictBadge = ({ exp }: { exp: Experiment }) => {
-  if (exp.status !== "concluded" || exp.verdict === null) {
-    const label = exp.status === "running" ? "running…" : exp.status === "open" ? "open" : "no verdict";
+/** A data-only outcome chip: how many rules regressed (or the run status). No go/no-go call — the data, you decide. */
+export const OutcomeChip = ({ exp }: { exp: Experiment }) => {
+  if (exp.status !== "concluded" || !exp.report) {
+    const label = exp.status === "running" ? "running…" : exp.status === "open" ? "open" : "no report";
     return <span className="verdict-badge verdict-badge-open">{label}</span>;
   }
-  const cls =
-    exp.verdict === "go" ? "verdict-badge-go" : exp.verdict === "no-go" ? "verdict-badge-nogo" : "verdict-badge-undecided";
-  return <span className={`verdict-badge ${cls}`}>{exp.verdict}</span>;
+  const n = exp.report.regressions;
+  const cls = n > 0 ? "verdict-badge-nogo" : "verdict-badge-go";
+  return <span className={`verdict-badge ${cls}`}>{n > 0 ? `${n} regressed` : "no regressions"}</span>;
 };
 
 /** Compact USD for the cost-delta chip. */
@@ -30,15 +30,16 @@ const money = (usd: number): string => {
   return v < 0 ? `−${s}` : v > 0 ? `+${s}` : "$0";
 };
 
-/** One experiment card: question, verdict, flow tag, per-rule delta chips, cost delta. */
+/** One experiment card: question, outcome, flow tag, per-rule delta chips, cost delta. */
 const ExperimentCard = ({ exp, flows }: { exp: Experiment; flows: FlowSummary[] }) => {
   const flowName = exp.flowId ? (flows.find((f) => f.id === exp.flowId)?.name ?? "flow") : null;
   const report = exp.report;
+  const accent = report ? (report.regressions > 0 ? "nogo" : "go") : "open";
   return (
-    <a className={`exp-card exp-card-${exp.verdict ?? "open"}`} href={`#/experiment/${encodeURIComponent(exp.id)}`}>
+    <a className={`exp-card exp-card-${accent}`} href={`#/experiment/${encodeURIComponent(exp.id)}`}>
       <div className="exp-card-head">
         <span className="exp-card-title">{exp.question}</span>
-        <VerdictBadge exp={exp} />
+        <OutcomeChip exp={exp} />
         <span className="muted exp-card-when">{relativeTime(exp.concludedAt ?? exp.createdAt)}</span>
       </div>
       <div className="exp-card-meta">
@@ -53,7 +54,7 @@ const ExperimentCard = ({ exp, flows }: { exp: Experiment; flows: FlowSummary[] 
         <div className="exp-chips">
           {report.compare.rules.map((r) => (
             <span key={r.id} className="exp-chip">
-              <span className="exp-chip-name">{r.label}</span>
+              <span className="exp-chip-name">{r.name}</span>
               <DeltaChip delta={r.deltaPassRate} />
             </span>
           ))}
@@ -211,7 +212,7 @@ export const Experiments = () => {
       <div className="page-head">
         <div>
           <h1 className="page-title">Experiments</h1>
-          <p className="muted">Every change you tried — the question, the verdict, and what regressed.</p>
+          <p className="muted">Every change you tried — the question, the compare, and what regressed. You make the call.</p>
         </div>
         <button className="btn" type="button" onClick={() => setShowForm((v) => !v)}>
           {showForm ? "Close" : "New experiment"}

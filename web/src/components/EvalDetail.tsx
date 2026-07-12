@@ -79,7 +79,7 @@ export const EvalDetail = ({ id }: { id: string }) => {
   const applyPatch = useCallback(
     (patch: {
       flowId?: string | null;
-      sourceFile?: string | null;
+      anchors?: import("../api").Anchor[] | null;
       autorunThreshold?: number;
       threshold?: number | null;
     }): Promise<void> => {
@@ -181,19 +181,19 @@ export const EvalDetail = ({ id }: { id: string }) => {
 
       <header className="detail-head">
         <div className="detail-title-row">
-          <h1 className="detail-title">{data.label}</h1>
-          {data.source === "deviation" && data.sourceDeviationId ? (
+          <h1 className="detail-title">{data.name}</h1>
+          {data.sourceDeviationId ? (
             <a
               className="eval-source eval-source-deviation eval-source-link"
               href={`#/deviation/${encodeURIComponent(data.sourceDeviationId)}`}
-              title="View the deviation this eval was saved from"
+              title="View the deviation this eval was promoted from"
             >
               deviation ↗
             </a>
           ) : (
             <span className={`eval-source eval-source-${data.source}`}>{data.source}</span>
           )}
-          <SourceChip sourceFile={data.sourceFile} />
+          <SourceChip anchors={data.anchors} />
           {data.flowId ? (
             <FlowChip flowId={data.flowId} flowName={flows.find((f) => f.id === data.flowId)?.name} />
           ) : null}
@@ -202,7 +202,7 @@ export const EvalDetail = ({ id }: { id: string }) => {
         {data.description ? <p className="detail-sub">{data.description}</p> : null}
         <div className="callout">
           <div className="callout-label">Rule</div>
-          <div className="callout-body">{data.rule}</div>
+          <div className="callout-body">{data.text}</div>
         </div>
 
         <div className="panel card-pad eval-scope">

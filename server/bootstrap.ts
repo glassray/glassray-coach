@@ -114,13 +114,13 @@ CREATE TABLE IF NOT EXISTS flow_traces (
 CREATE INDEX IF NOT EXISTS flow_traces_trace_id_idx ON flow_traces (trace_id);
 CREATE TABLE IF NOT EXISTS evals (
   id text PRIMARY KEY,
-  label text NOT NULL,
+  name text NOT NULL,
   description text NOT NULL,
-  rule text NOT NULL,
+  text text NOT NULL,
   source text NOT NULL,
   source_deviation_id text,
   flow_id text,
-  source_file text,
+  anchors jsonb,
   state text NOT NULL DEFAULT 'active',
   autorun_threshold integer NOT NULL DEFAULT 10,
   threshold double precision,
@@ -225,10 +225,40 @@ DO $$ BEGIN
   END IF;
 END $$;
 -- Rules-by-source (retire the proposed/watched/archived lifecycle): a rule now
--- carries WHERE it came from (a repo path, null = custom) instead of a state.
--- The legacy state column is left in place (vestigial — never read for
--- gating) to avoid a destructive migration.
-ALTER TABLE evals ADD COLUMN IF NOT EXISTS source_file text;
+-- carries WHERE it came from instead of a state. The legacy state column is
+-- left in place (vestigial — never read for gating) to avoid a destructive
+-- migration.
+-- ── Cloud FlowRule vocabulary alignment ──────────────────────────────────────
+-- Rename/reshape the eval columns to match cloud's canonical FlowRule primitive:
+--   label -> name, rule -> text, and the invented source_file (a repo path) ->
+--   the cloud model of source (code|promoted provenance) + anchors (WHERE in
+--   code). Guarded on column existence so each step runs exactly once per
+--   pre-alignment datadir; a fresh datadir (new CREATE TABLE above) no-ops.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'label')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'name') THEN
+    ALTER TABLE evals RENAME COLUMN label TO name;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'rule')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'text') THEN
+    ALTER TABLE evals RENAME COLUMN rule TO text;
+  END IF;
+  ALTER TABLE evals ADD COLUMN IF NOT EXISTS anchors jsonb;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'source_file') THEN
+    -- Fold the file path into an anchor (only where not already migrated)…
+    UPDATE evals
+      SET anchors = json_build_array(json_build_object('file', source_file))
+      WHERE source_file IS NOT NULL AND anchors IS NULL;
+    -- …then re-derive provenance: a file-anchored rule is read-from-code, every
+    -- other (deviation|manual) rule was authored → promoted.
+    UPDATE evals SET source = CASE WHEN source_file IS NOT NULL THEN 'code' ELSE 'promoted' END;
+    ALTER TABLE evals DROP COLUMN source_file;
+  ELSE
+    -- No source_file column (0.1 legacy, or already aligned): map only the legacy
+    -- provenance values, never clobbering an already-migrated code|promoted.
+    UPDATE evals SET source = 'promoted' WHERE source IN ('deviation', 'manual');
+  END IF;
+END $$;
 -- Portable-rule-artifact columns (idempotent on their own).
 ALTER TABLE evals ADD COLUMN IF NOT EXISTS threshold double precision;
 ALTER TABLE evals ADD COLUMN IF NOT EXISTS judge_model text;
