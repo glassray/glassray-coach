@@ -30,6 +30,8 @@ export interface TraceListItem {
   tokensIn: number | null;
   tokensOut: number | null;
   inputPreview: string | null;
+  /** The run label this trace belongs to (`glassray run --label`), or null. */
+  runLabel: string | null;
 }
 
 /** GET /api/traces — a page of summaries plus the (filtered) total. */
@@ -71,6 +73,8 @@ export interface StatsResponse {
     avgDurationMs: number;
     p95DurationMs: number;
     estCostUsd: number;
+    /** Price-book estimate keyed by each trace's primary model — honest even on free providers. */
+    estCostIfMeteredUsd: number;
   };
   byAgent: Array<{
     agent: string | null;
@@ -80,6 +84,7 @@ export interface StatsResponse {
     tokensOut: number;
     avgDurationMs: number;
     estCostUsd: number;
+    estCostIfMeteredUsd: number;
   }>;
   agents: string[];
 }
@@ -144,10 +149,10 @@ export interface RunHandle {
   status: "queued" | "running";
 }
 
-/** GET /api/runs/:id — status of one background discovery/flows/eval/classify run. */
+/** GET /api/runs/:id — status of one background discovery/flows/eval/classify/compare run. */
 export interface RunStatus {
   id: string;
-  kind: "discovery" | "flows" | "eval" | "improver" | "classify";
+  kind: "discovery" | "flows" | "eval" | "improver" | "classify" | "compare";
   status: "queued" | "running" | "done" | "error";
   error: string | null;
   stats: Record<string, unknown> | null;
@@ -235,6 +240,8 @@ export interface FlowSummary {
   status: FlowStatus;
   /** Who created the flow: `user`, `claude`, or the `discovery` bootstrap. */
   createdBy: string;
+  /** Stable artifact identity (the `glassray.yaml` flow id); null until exported/imported. */
+  slug: string | null;
   traceCount: number;
   createdAt: string;
   updatedAt: string;
@@ -260,12 +267,19 @@ export interface FlowMember {
   assignedAt: string;
 }
 
-/** An eval attached to a flow, as listed in the flow's detail. */
+/** A rule's lifecycle state: proposed (observed, not gating) | watched (autoruns + gates check) | archived. */
+export type RuleState = "proposed" | "watched" | "archived";
+
+/** An assertion rule attached to a flow, as listed in the flow's detail. */
 export interface FlowEvalRef {
   id: string;
   label: string;
   rule: string;
-  autorun: boolean;
+  state: RuleState;
+  /** Provenance: `deviation` or `manual`. */
+  source: string;
+  /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
+  threshold: number | null;
   lastRunAt: string | null;
 }
 
@@ -316,7 +330,7 @@ export interface FlowAudit {
   counts: { members: number; lowConfidence: number; unclassifiedStoreWide: number };
 }
 
-/** One eval + its latest-run rollup, as listed by GET /api/evals. */
+/** One eval (assertion rule) + its latest-run rollup, as listed by GET /api/evals. */
 export interface EvalSummary {
   id: string;
   label: string;
@@ -327,10 +341,16 @@ export interface EvalSummary {
   sourceDeviationId: string | null;
   /** The flow this eval is scoped to (runs sample its members); null = global. */
   flowId: string | null;
-  /** Whether the server auto-reruns this eval when its flow accrues new members. */
-  autorun: boolean;
-  /** New member traces (since the last run) needed to trigger an automatic rerun. */
+  /** Lifecycle: watched rules autorun and gate `glassray check`. */
+  state: RuleState;
+  /** New member traces (since the last run) needed to trigger an automatic rerun of a watched rule. */
   autorunThreshold: number;
+  /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
+  threshold: number | null;
+  /** Preferred judge model for this rule's runs; null = the light-tier default. */
+  judgeModel: string | null;
+  /** Stable artifact identity (the `glassray.yaml` rule id); null until exported/imported. */
+  slug: string | null;
   createdAt: string;
   /** The most recent run that scored this eval (null before any run). */
   latestRunId: string | null;
@@ -384,6 +404,8 @@ export interface ModelUsage {
   tokensIn: number;
   tokensOut: number;
   costUsd: number;
+  /** What these tokens WOULD cost on a metered key (the price book) — honest even at $0 actual. */
+  costIfMeteredUsd: number;
 }
 
 /** GET /api/usage — Coach's own LLM spend vs the budget, broken down by model + kind. */
@@ -391,6 +413,8 @@ export interface UsageSummary {
   /** The spend cap in USD, or null when unlimited (opt-out). */
   budgetUsd: number | null;
   spentUsd: number;
+  /** What the recorded tokens WOULD have cost on metered API keys (price-book estimate). */
+  spentIfMeteredUsd: number;
   remainingUsd: number | null;
   overBudget: boolean;
   calls: number;
@@ -595,6 +619,10 @@ export const fetchFlowAudit = (id: string): Promise<FlowAudit> =>
 export const fetchRun = (id: string): Promise<RunStatus> =>
   getJson<RunStatus>(`/api/runs/${encodeURIComponent(id)}`);
 
+/** Load recent background runs, newest-first (GET /api/runs?limit=100). */
+export const fetchRuns = async (): Promise<RunStatus[]> =>
+  (await getJson<{ items: RunStatus[] }>("/api/runs?limit=100")).items;
+
 /** Cancel the in-flight run (POST /api/runs/:id/cancel); 409 if it isn't the active run. */
 export const cancelRun = (id: string): Promise<Record<string, never>> =>
   postJson<Record<string, never>>(`/api/runs/${encodeURIComponent(id)}/cancel`);
@@ -632,20 +660,28 @@ export const resolveDeviation = (id: string): Promise<{ status: string }> =>
 export const reopenDeviation = (id: string): Promise<{ status: string }> =>
   postJson<{ status: string }>(`/api/deviations/${encodeURIComponent(id)}/reopen`);
 
-/** Create a hand-written eval from a label + rule (+ optional flow scope / autorun tuning) (POST /api/evals). */
+/** Create a hand-written rule from a label + rule text (+ optional flow scope / state / gate tuning) (POST /api/evals). */
 export const createEval = (input: {
   label: string;
   rule: string;
   description?: string;
   flowId?: string;
-  autorun?: boolean;
+  state?: RuleState;
   autorunThreshold?: number;
+  threshold?: number;
+  judgeModel?: string;
 }): Promise<{ id: string }> => postJson<{ id: string }>("/api/evals", input);
 
-/** Patch an eval's flow binding / autorun tuning and get the fresh detail back (PATCH /api/evals/:id). */
+/** Patch a rule's flow binding / lifecycle state / gate tuning and get the fresh detail back (PATCH /api/evals/:id). */
 export const updateEval = (
   id: string,
-  patch: { flowId?: string | null; autorun?: boolean; autorunThreshold?: number },
+  patch: {
+    flowId?: string | null;
+    state?: RuleState;
+    autorunThreshold?: number;
+    threshold?: number | null;
+    judgeModel?: string | null;
+  },
 ): Promise<EvalDetail> => patchJson<EvalDetail>(`/api/evals/${encodeURIComponent(id)}`, patch);
 
 /** Start an eval-scoring run with optional sample-size / judge-model overrides (POST /api/evals/:id/run → 202). */
@@ -658,6 +694,60 @@ export const runEval = (evalId: string, sampleSize?: number, model?: string): Pr
 /** Delete an eval and its stored verdicts (DELETE /api/evals/:id). */
 export const deleteEval = (id: string): Promise<Record<string, never>> =>
   delJson<Record<string, never>>(`/api/evals/${encodeURIComponent(id)}`);
+
+/** How a compare side names its corpus: pinned trace ids, a run label, an agent tag, or a flow's members. */
+export type CorpusRef = { traceIds: string[] } | { label: string } | { agent: string } | { flowId: string };
+
+/** One rule's two-sided compare result (an entry of the finished run's stats.rules). */
+export interface CompareRuleResult {
+  id: string;
+  slug: string | null;
+  label: string;
+  baseline: { scored: number; passed: number; failed: number; passRate: number | null };
+  candidate: { scored: number; passed: number; failed: number; passRate: number | null };
+  /** candidate − baseline pass rate; null when either side scored nothing. */
+  deltaPassRate: number | null;
+  regressed: boolean;
+}
+
+/** Aggregate facts about one compare side's traces. */
+export interface CompareCorpusStats {
+  ref: CorpusRef;
+  traces: number;
+  tokensIn: number;
+  tokensOut: number;
+  /** Provider-blended estimate of real spend — 0 for free-provider corpora. */
+  estCostUsd: number;
+  /** Price-book estimate keyed by each trace's primary model — the honest "is it cheaper?" number. */
+  estCostIfMeteredUsd: number;
+  avgDurationMs: number;
+}
+
+/** The full compare report, as stored in the finished run's stats blob. */
+export interface CompareReport {
+  flowId: string | null;
+  sampleSize: number;
+  rules: CompareRuleResult[];
+  baseline: CompareCorpusStats;
+  candidate: CompareCorpusStats;
+  /** candidate − baseline price-book cost: negative = the change is cheaper. */
+  costIfMeteredDeltaUsd: number;
+  regressions: number;
+}
+
+/** Start a compare run over two corpora (POST /api/compare → 202). */
+export const runCompare = (input: {
+  baseline: CorpusRef;
+  candidate: CorpusRef;
+  flowId?: string;
+  sampleSize?: number;
+}): Promise<RunHandle> => postJson<RunHandle>("/api/compare", input);
+
+/** Load the newest finished compare run (best-effort — null when none exists). */
+export const fetchLastCompare = async (): Promise<RunStatus | null> => {
+  const { items } = await getJson<{ items: RunStatus[] }>("/api/runs?limit=100");
+  return items.find((r) => r.kind === "compare" && r.status === "done") ?? null;
+};
 
 /** Re-issue an (edited) LLM request as free text (POST /api/replay); throws the server's error on 502. */
 export const replaySpan = (req: ReplayRequest): Promise<ReplayResponse> =>

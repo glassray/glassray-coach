@@ -6,6 +6,16 @@ import fastifyStatic from '@fastify/static';
 import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import { z } from 'zod';
+import {
+  applyImport,
+  artifactSchema,
+  artifactToYaml,
+  exportArtifact,
+  mergeLocalOnly,
+  parseArtifactYaml,
+  planImport,
+  slugify,
+} from './artifact.js';
 import type { CoachRuntime } from './bootstrap.js';
 import {
   classifyTracesInline,
@@ -14,6 +24,7 @@ import {
   resetClassificationForBackfill,
   runClassifySweep,
 } from './classify.js';
+import { corpusRefSchema, runCompare } from './compare.js';
 import { claimQueuedRun, createRun, failRun, runDiscovery, type RunKind } from './discovery.js';
 import {
   autorunDueEvals,
@@ -38,7 +49,7 @@ import { runImprover } from './improver.js';
 import { collectTraceIds, otlpEnvelopeSchema, TraceNormalizeError, upsertTrace } from './ingest.js';
 import { providerAvailability, resolveLlm, resolveLlmConfig } from './llm.js';
 import { saveSettings, settingsSchema } from './settings.js';
-import { estimateCostUsd } from './pricing.js';
+import { estimateCostIfMetered, estimateCostUsd } from './pricing.js';
 import { BudgetExceededError, generateTextTracked, getUsageSummary, resetUsage, resolveBudgetUsd } from './usage.js';
 import { deviationExamples, deviations, evals, flowTraces, flows, runs, traces } from './schema.js';
 import { bearerToken, isLoopbackHost, isLoopbackOrigin, timingSafeKeyEquals } from './security.js';
@@ -93,6 +104,13 @@ const listQuerySchema = z.object({
   status: z.enum(['error', 'ok']).optional(),
   /** Only traces that are members of this flow. */
   flow: z.string().trim().max(100).optional(),
+  /** Exact run-label filter (the `glassray run --label` corpus key). */
+  label: z.string().trim().min(1).max(200).optional(),
+});
+
+/** Optional query contract for the ingest routes: a run-label override for every trace in the POST. */
+const ingestQuerySchema = z.object({
+  label: z.string().trim().min(1).max(200).optional(),
 });
 
 /** Body contract for POST /api/discovery/run — optional sample-size override + flow scope. */
@@ -101,10 +119,13 @@ const discoveryBodySchema = z.object({
   flowId: z.string().trim().min(1).max(100).optional(),
 });
 
+/** A rule's lifecycle state (see docs/portable-rule-artifact.md §2): watched rules autorun + gate `check`. */
+const ruleStateSchema = z.enum(['proposed', 'watched', 'archived']);
+
 /**
  * Body contract for POST /api/evals — either "save from a deviation"
- * (`{ deviationId }`) or a hand-written eval (`{ label, rule, … }`), both
- * optionally scoped to a flow (with autorun tuning on the hand-written shape).
+ * (`{ deviationId }` — lands as a `proposed` rule) or a hand-written rule
+ * (`{ label, rule, … }`), both optionally scoped to a flow.
  */
 const createEvalBodySchema = z.union([
   z.object({
@@ -116,22 +137,62 @@ const createEvalBodySchema = z.union([
     rule: z.string().trim().min(1).max(2000),
     description: z.string().trim().max(2000).optional(),
     flowId: z.string().trim().min(1).max(100).optional(),
-    autorun: z.boolean().optional(),
+    state: ruleStateSchema.optional(),
     autorunThreshold: z.number().int().min(1).max(1000).optional(),
+    threshold: z.number().min(0).max(1).optional(),
+    judgeModel: z.string().trim().min(1).max(200).optional(),
   }),
 ]);
 
-/** Body contract for PATCH /api/evals/:id — flow binding + autorun tuning. */
+/** Body contract for PATCH /api/evals/:id — flow binding + lifecycle state + gate tuning. */
 const evalPatchSchema = z.object({
   flowId: z.string().trim().min(1).max(100).nullable().optional(),
-  autorun: z.boolean().optional(),
+  state: ruleStateSchema.optional(),
   autorunThreshold: z.number().int().min(1).max(1000).optional(),
+  threshold: z.number().min(0).max(1).nullable().optional(),
+  judgeModel: z.string().trim().min(1).max(200).nullable().optional(),
 });
 
-/** Body contract for POST /api/evals/:id/run — optional sample-size + judge-model overrides. */
+/** Body contract for POST /api/evals/:id/run — sample-size / judge-model overrides, or a pinned fixtures corpus. */
 const evalRunBodySchema = z.object({
   sampleSize: z.coerce.number().int().min(1).max(200).optional(),
   model: z.string().trim().min(1).max(200).optional(),
+  /** Score exactly these traces (the deterministic `check --fixtures` corpus). */
+  traceIds: z.array(z.string().regex(/^[0-9a-f]{32}$/i)).min(1).max(200).optional(),
+});
+
+/** Body contract for POST /api/export — fresh export (or an external artifact) merged over a base file's local-only sections. */
+const exportBodySchema = z.object({
+  baseYaml: z.string().max(1_000_000).optional(),
+  artifact: z.unknown().optional(),
+});
+
+/** Body contract for POST /api/artifact/parse — a glassray.yaml document to validate + return structured. */
+const parseBodySchema = z.object({
+  yaml: z.string().min(1).max(1_000_000),
+});
+
+/** Body contract for POST /api/import — the artifact as YAML text or a parsed object, plan-only by default. */
+const importBodySchema = z.object({
+  yaml: z.string().max(1_000_000).optional(),
+  artifact: z.unknown().optional(),
+  /** False (default) = plan only (`--dry-run`); true = apply the plan. */
+  apply: z.boolean().default(false),
+  /** Execute prunes (archive unmentioned live flows/rules) — never on by default. */
+  prune: z.boolean().default(false),
+});
+
+/** Body contract for POST /api/compare — two corpora + the optional flow whose watched rules form the suite. */
+const compareBodySchema = z.object({
+  flowId: z.string().trim().min(1).max(100).optional(),
+  baseline: corpusRefSchema,
+  candidate: corpusRefSchema,
+  sampleSize: z.coerce.number().int().min(1).max(100).optional(),
+});
+
+/** Query contract for GET /api/flows/:id/fixtures — how many newest members to freeze. */
+const fixturesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(200).default(20),
 });
 
 /** Body contract for POST /api/flows — a durable flow definition (selector and/or rule). */
@@ -183,14 +244,36 @@ const TIMELINE_BUCKETS = 30;
 const MIN_BUCKET_MS = 60_000;
 
 /**
- * Backstop timeout for a background run (discovery / flows / eval). A stalled LLM
- * call would otherwise leave the run `running` forever — holding the single-run
- * lock and spinning the UI. Overridable via GLASSRAY_RUN_TIMEOUT_MS; `0` disables.
+ * Explicit backstop timeout for a background run, when set: GLASSRAY_RUN_TIMEOUT_MS
+ * verbatim (`0` disables). Null = unset, use the provider-adaptive default below.
  */
-const RUN_TIMEOUT_MS = (() => {
+const RUN_TIMEOUT_ENV_MS = (() => {
   const raw = Number(process.env.GLASSRAY_RUN_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw >= 0 ? raw : 600_000;
+  return Number.isFinite(raw) && raw >= 0 ? raw : null;
 })();
+
+/** Default backstop timeout for a background run on the metered/mock providers. */
+const DEFAULT_RUN_TIMEOUT_MS = 600_000;
+
+/**
+ * The zero-config `claude-subscription` provider runs a full Agent SDK turn per
+ * call — its heavy-tier grouping legitimately outlives the flat 600s backstop
+ * (the dogfood's discovery run timed out and produced nothing). Give it 3×.
+ */
+const SUBSCRIPTION_TIMEOUT_MULTIPLIER = 3;
+
+/**
+ * Backstop timeout for a background run (discovery / flows / eval / compare). A
+ * stalled LLM call would otherwise leave the run `running` forever — holding the
+ * single-run lock and spinning the UI. Provider-adaptive: the explicit env wins,
+ * else 600s, tripled under `claude-subscription`. Resolved per run start so a
+ * settings change applies without a restart.
+ */
+const runTimeoutMs = (): number =>
+  RUN_TIMEOUT_ENV_MS ??
+  (resolveLlmConfig().provider === 'claude-subscription'
+    ? DEFAULT_RUN_TIMEOUT_MS * SUBSCRIPTION_TIMEOUT_MULTIPLIER
+    : DEFAULT_RUN_TIMEOUT_MS);
 
 /**
  * Debounce (ms) between the last ingest and the background classify sweep, so
@@ -330,6 +413,13 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     if (!parsed.success) {
       return reply.code(400).send({ error: 'invalid OTLP JSON envelope: expected { resourceSpans: [...] }' });
     }
+    // Optional `?label=` overrides every landed trace's run label — how
+    // cloud-pulled traces are tagged `production` on their way in.
+    const query = ingestQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      return reply.code(400).send({ error: 'invalid label query parameter' });
+    }
+    const labelOverride = query.data.label;
     const envelope = req.body;
     const traceIds = collectTraceIds(envelope);
     // Ingest each trace independently: one malformed span shouldn't 500 the
@@ -338,7 +428,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     const landed: string[] = [];
     for (const traceId of traceIds) {
       try {
-        await upsertTrace(db, traceId, envelope, buildTraceView);
+        await upsertTrace(db, traceId, envelope, buildTraceView, labelOverride);
         tail.broadcast(traceId);
         landed.push(traceId);
       } catch (err) {
@@ -387,7 +477,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     if (!query.success) {
       return reply.code(400).send({ error: 'invalid limit/offset query parameters' });
     }
-    const { limit, offset, q, agent, status, flow } = query.data;
+    const { limit, offset, q, agent, status, flow, label } = query.data;
     // Compose the active filters into one WHERE (undefined clauses drop out).
     const clauses: SQL[] = [];
     if (q) {
@@ -396,6 +486,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     }
     if (agent) clauses.push(eq(traces.agent, agent));
     if (status) clauses.push(eq(traces.status, status));
+    if (label) clauses.push(eq(traces.runLabel, label));
     if (flow) {
       clauses.push(
         inArray(
@@ -418,6 +509,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
           tokensIn: traces.tokensIn,
           tokensOut: traces.tokensOut,
           inputPreview: traces.inputPreview,
+          runLabel: traces.runLabel,
         })
         .from(traces)
         .where(where)
@@ -431,8 +523,10 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
 
   app.get('/api/stats', async () => {
     // Rollups over the denormalized trace columns — cheap, no `raw` walk. The
-    // cost figure is a rough provider-blended estimate (see pricing.ts).
-    const [totalsRow, byAgentRows, byProviderRows, agentRows] = await Promise.all([
+    // cost figure is a rough provider-blended estimate (see pricing.ts); the
+    // "if metered" figure prices each (agent, model) token bucket through the
+    // price book via the persisted per-trace primary model.
+    const [totalsRow, byAgentRows, byProviderRows, agentRows, byAgentModelRows] = await Promise.all([
       db
         .select({
           traces: sql<number>`count(*)::int`,
@@ -469,6 +563,16 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
         .from(traces)
         .where(sql`${traces.agent} is not null`)
         .orderBy(traces.agent),
+      // (agent, model) token buckets — priced in JS through the price book.
+      db
+        .select({
+          agent: traces.agent,
+          model: traces.model,
+          tokensIn: sql<number>`coalesce(sum(${traces.tokensIn}), 0)::int`,
+          tokensOut: sql<number>`coalesce(sum(${traces.tokensOut}), 0)::int`,
+        })
+        .from(traces)
+        .groupBy(traces.agent, traces.model),
     ]);
     const totals = totalsRow[0] ?? {
       traces: 0,
@@ -483,11 +587,19 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
       (sum, r) => sum + estimateCostUsd(r.provider, r.tokensIn, r.tokensOut),
       0,
     );
+    // Price-book cost per agent: each (agent, model) bucket priced by model id.
+    const ifMeteredByAgent = new Map<string | null, number>();
+    for (const r of byAgentModelRows) {
+      const cost = estimateCostIfMetered(r.model, r.tokensIn, r.tokensOut);
+      ifMeteredByAgent.set(r.agent, (ifMeteredByAgent.get(r.agent) ?? 0) + cost);
+    }
+    const estCostIfMeteredUsd = [...ifMeteredByAgent.values()].reduce((sum, v) => sum + v, 0);
     return {
-      totals: { ...totals, estCostUsd },
+      totals: { ...totals, estCostUsd, estCostIfMeteredUsd },
       byAgent: byAgentRows.map((r) => ({
         ...r,
         estCostUsd: estimateCostUsd(r.provider, r.tokensIn, r.tokensOut),
+        estCostIfMeteredUsd: ifMeteredByAgent.get(r.agent) ?? 0,
       })),
       agents: agentRows.map((r) => r.agent).filter((a): a is string => a !== null),
     };
@@ -556,13 +668,14 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
    */
   const superviseRun = (runId: string, work: Promise<unknown>, controller: AbortController): void => {
     let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeoutMs = runTimeoutMs();
     const settled = work.then(() => 'settled' as const).catch(() => 'settled' as const);
     const race =
-      RUN_TIMEOUT_MS > 0
+      timeoutMs > 0
         ? Promise.race([
             settled,
             new Promise<'timeout'>((resolve) => {
-              timer = setTimeout(() => resolve('timeout'), RUN_TIMEOUT_MS);
+              timer = setTimeout(() => resolve('timeout'), timeoutMs);
             }),
           ])
         : settled;
@@ -571,7 +684,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
         if (outcome === 'timeout') {
           // Mark errored first (so the runner's own error-path finaliser no-ops),
           // then abort the stuck provider call to stop further spend.
-          await failRun(db, runId, `run timed out after ${Math.round(RUN_TIMEOUT_MS / 1000)}s`).catch(() => {});
+          await failRun(db, runId, `run timed out after ${Math.round(timeoutMs / 1000)}s`).catch(() => {});
           controller.abort();
         }
       })
@@ -947,7 +1060,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     if (!parsed.success) {
       return reply
         .code(400)
-        .send({ error: 'invalid body: expected { deviationId, flowId? } or { label, rule, description?, flowId?, autorun?, autorunThreshold? }' });
+        .send({ error: 'invalid body: expected { deviationId, flowId? } or { label, rule, description?, flowId?, state?, autorunThreshold?, threshold?, judgeModel? }' });
     }
     if (parsed.data.flowId && !(await flowExists(parsed.data.flowId))) {
       return reply.code(404).send({ error: 'flow not found' });
@@ -967,7 +1080,7 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     if (!parsed.success) {
       return reply
         .code(400)
-        .send({ error: 'invalid body: expected { flowId?, autorun?, autorunThreshold? }' });
+        .send({ error: 'invalid body: expected { flowId?, state?, autorunThreshold?, threshold?, judgeModel? }' });
     }
     if (parsed.data.flowId && !(await flowExists(parsed.data.flowId))) {
       return reply.code(404).send({ error: 'flow not found' });
@@ -1003,13 +1116,145 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
     const evalId = (req.params as { id: string }).id;
     const parsed = evalRunBodySchema.safeParse(req.body ?? {});
     if (!parsed.success) {
-      return reply.code(400).send({ error: 'invalid body: expected { sampleSize?: number, model?: string }' });
+      return reply
+        .code(400)
+        .send({ error: 'invalid body: expected { sampleSize?: number, model?: string, traceIds?: string[] }' });
     }
     const rows = await db.select({ id: evals.id }).from(evals).where(eq(evals.id, evalId)).limit(1);
     if (!rows[0]) return reply.code(404).send({ error: 'eval not found' });
-    const { sampleSize, model } = parsed.data;
+    const { sampleSize, model, traceIds } = parsed.data;
     const res = await enqueueRun('eval', `eval:${evalId}`, (runId, signal) =>
-      runEval(db, { evalId, runId, sampleSize, model, signal }),
+      runEval(db, { evalId, runId, sampleSize, model, traceIds, signal }),
+    );
+    return reply.code(202).send(res);
+  });
+
+  // ── the portable rule artifact: export / import / fixtures / compare ───────
+  // (docs/portable-rule-artifact.md — serialize the flows + rules to
+  // glassray.yaml, reconcile a file back in, freeze golden traces, and the A/B
+  // compare that is the local product's reason to exist.)
+
+  app.get('/api/export', async () => {
+    const artifact = await exportArtifact(db);
+    return { artifact, yaml: artifactToYaml(artifact) };
+  });
+
+  /**
+   * POST /api/export — export with LOCAL-ONLY preservation. `baseYaml` is the
+   * repo's existing glassray.yaml: its per-flow `run` recipes, `project`, and
+   * `fixtures` refs are overlaid onto the fresh portable sections. `artifact`
+   * (optional) substitutes an external portable source — the cloud-pull path —
+   * instead of exporting this server's own state.
+   */
+  app.post('/api/export', async (req, reply) => {
+    const parsed = exportBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid body: expected { baseYaml?: string, artifact?: object }' });
+    }
+    try {
+      let fresh;
+      if (parsed.data.artifact !== undefined) {
+        const validated = artifactSchema.safeParse(parsed.data.artifact);
+        if (!validated.success) throw new Error(`invalid artifact: ${z.prettifyError(validated.error)}`);
+        fresh = validated.data;
+      } else {
+        fresh = await exportArtifact(db);
+      }
+      const merged =
+        parsed.data.baseYaml !== undefined ? mergeLocalOnly(fresh, parseArtifactYaml(parsed.data.baseYaml)) : fresh;
+      return { artifact: merged, yaml: artifactToYaml(merged) };
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'export failed' });
+    }
+  });
+
+  /** Parse + validate a glassray.yaml document for the zero-dependency CLI (`glassray run` reads recipes through this). */
+  app.post('/api/artifact/parse', async (req, reply) => {
+    const parsed = parseBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: 'invalid body: expected { yaml: string }' });
+    }
+    try {
+      return { artifact: parseArtifactYaml(parsed.data.yaml) };
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'invalid glassray.yaml' });
+    }
+  });
+
+  app.post('/api/import', async (req, reply) => {
+    const parsed = importBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: 'invalid body: expected { yaml? | artifact?, apply?: boolean, prune?: boolean }' });
+    }
+    const { yaml, artifact: rawArtifact, apply, prune } = parsed.data;
+    if ((yaml === undefined) === (rawArtifact === undefined)) {
+      return reply.code(400).send({ error: 'pass exactly one of yaml (document text) or artifact (parsed object)' });
+    }
+    let artifact;
+    try {
+      if (yaml !== undefined) {
+        artifact = parseArtifactYaml(yaml);
+      } else {
+        const validated = artifactSchema.safeParse(rawArtifact);
+        if (!validated.success) throw new Error(`invalid artifact: ${z.prettifyError(validated.error)}`);
+        artifact = validated.data;
+      }
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'invalid artifact' });
+    }
+    if (!apply) {
+      const plan = await planImport(db, artifact);
+      return { ...plan, applied: false };
+    }
+    try {
+      const result = await applyImport(db, artifact, { prune });
+      // A changed/new LLM membership rule reconsiders the newest traces
+      // (bounded backfill), exactly like the flow CRUD routes.
+      if (result.llmDefinitionChanged) {
+        await resetClassificationForBackfill(db);
+        scheduleClassifySweep();
+      }
+      return result;
+    } catch (err) {
+      return reply.code(400).send({ error: err instanceof Error ? err.message : 'import failed' });
+    }
+  });
+
+  app.get('/api/flows/:id/fixtures', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    const query = fixturesQuerySchema.safeParse(req.query);
+    if (!query.success) return reply.code(400).send({ error: 'invalid limit query parameter' });
+    const flowRows = await db.select().from(flows).where(eq(flows.id, id)).limit(1);
+    const flow = flowRows[0];
+    if (!flow) return reply.code(404).send({ error: 'flow not found' });
+    // The stored raw envelope IS the fixture: re-POSTing it to /v1/traces
+    // reproduces the trace byte-for-byte (same trace id ⇒ idempotent upsert).
+    const items = await db
+      .select({ traceId: flowTraces.traceId, raw: traces.raw })
+      .from(flowTraces)
+      .innerJoin(traces, eq(flowTraces.traceId, traces.id))
+      .where(eq(flowTraces.flowId, id))
+      .orderBy(desc(flowTraces.assignedAt), desc(flowTraces.traceId))
+      .limit(query.data.limit);
+    return { flow: { id: flow.id, name: flow.name, slug: flow.slug ?? slugify(flow.name) }, items };
+  });
+
+  app.post('/api/compare', async (req, reply) => {
+    const parsed = compareBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error:
+          'invalid body: expected { baseline, candidate, flowId?, sampleSize? } where each corpus is { traceIds } | { agent } | { flowId }',
+      });
+    }
+    const { flowId, baseline, candidate, sampleSize } = parsed.data;
+    if (flowId && !(await flowExists(flowId))) {
+      return reply.code(404).send({ error: 'flow not found' });
+    }
+    const res = await enqueueRun('compare', 'compare', (runId, signal) =>
+      runCompare(db, { runId, flowId, baseline, candidate, sampleSize, signal }),
     );
     return reply.code(202).send(res);
   });

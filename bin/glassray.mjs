@@ -339,6 +339,12 @@ const RESOURCE_COMMANDS = new Set([
   'discovery',
   'fix',
   'runs',
+  'pull',
+  'push',
+  'check',
+  'compare',
+  'run',
+  'link',
 ]);
 
 /** Validate + normalize a port value (flag or $GLASSRAY_PORT); exits 1 when unusable. */
@@ -444,6 +450,12 @@ if (command === undefined || command === 'help') {
     discovery: commands.cmdDiscovery,
     fix: commands.cmdFix,
     runs: commands.cmdRuns,
+    pull: commands.cmdPull,
+    push: commands.cmdPush,
+    check: commands.cmdCheck,
+    compare: commands.cmdCompare,
+    run: commands.cmdRun,
+    link: commands.cmdLink,
   };
   await handlers[command]({ port, args: rest });
 } else {

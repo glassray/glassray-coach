@@ -40,7 +40,9 @@ modes and a walkthrough; `node examples/send-otlp.mjs` sends a single sample tra
 - **Live viewer + replay** — traces stream in as your agent runs; open the span waterfall, edit any LLM call, re-issue it.
 - **Discovery** — an LLM judge clusters where runs went wrong into recurring **deviation types**, each with a plain-language rule.
 - **Durable flows** — name your agent's behaviours once (a selector and/or a plain-language rule); Coach classifies new traffic into them in the background.
-- **Flow-scoped autorun evals** — freeze any deviation or rule into a repeatable pass/fail check that **reruns on its own** as fresh traffic lands, flagging regressions.
+- **Assertion rules with a lifecycle** — freeze any deviation or hand-written rule into a repeatable pass/fail check; `proposed` rules observe, **`watched` rules rerun on their own** as fresh traffic lands and gate `glassray check`, flagging regressions.
+- **The portable rule artifact** — `glassray pull` serializes your flows + rules into a versioned `glassray.yaml` (plus frozen golden traces with `--as-fixtures`); `glassray push` reconciles it back terraform-style; `glassray check --fixtures` is the deterministic CI gate.
+- **The harness loop** — your coding agent authors the flow + rules + a `run` recipe in `glassray.yaml`; `glassray run <flow> --label baseline`, make the change, `run --label candidate`, then `glassray compare <flow> baseline candidate` proves behaviour held — per-rule pass-rate deltas plus an honest price-book **"cost if metered"** per side (never `$0/$0` on the free provider). With a linked cloud project, `glassray pull --traces` makes real production traces the baseline and pins their inputs for the candidate run.
 - **Fix generation** — one paste-into-your-coding-agent instruction doc per deviation: search plan, likely files, ordered edits, acceptance criteria.
 - **Agent-first CLI + skill** — every data command prints the API's JSON verbatim; `glassray init` teaches your coding agent the whole loop.
 - **Runs on your model** — your local `~/.claude` subscription (zero-config), a metered API key, or an offline deterministic `mock`; every metered call is budget-capped (`GLASSRAY_LLM_BUDGET_USD`, default $50).
@@ -56,7 +58,8 @@ glassray <command> --help
 ```
 
 `start` / `init` / `status` / `doctor` / `reset` manage the server. The data commands — `traces`, `flows`,
-`evals`, `deviations`, `discovery`, `fix`, `runs`, `stats`, `usage` — talk to a running Coach over loopback and
+`evals`, `deviations`, `discovery`, `fix`, `runs`, `stats`, `usage`, plus the loop verbs `pull`, `push`,
+`run`, `compare`, `check`, and `link` — talk to a running Coach over loopback and
 print the API's JSON **verbatim** (errors to stderr; exit `0` ok, `1` API error, `2` no server). Long verbs poll
 their run to completion (`--no-wait` / `--timeout`). Full reference:
 [glassray.ai/docs/coach/cli](https://glassray.ai/docs/coach/cli).

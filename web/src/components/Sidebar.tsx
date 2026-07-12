@@ -1,7 +1,15 @@
 import type { ReactElement } from "react";
 
 /** Identifier for one of the top-level sections reachable from the sidebar. */
-export type TabKey = "overview" | "traces" | "deviations" | "flows" | "evals" | "settings";
+export type TabKey =
+  | "overview"
+  | "traces"
+  | "deviations"
+  | "flows"
+  | "evals"
+  | "compare"
+  | "experiments"
+  | "settings";
 
 /** Grid icon — the Overview dashboard. */
 const IconGrid = () => (
@@ -40,8 +48,8 @@ const IconActivity = () => (
   </svg>
 );
 
-/** Spark/zap icon — the Deviations section. */
-const IconZap = () => (
+/** Flask icon — the Experiments section. */
+const IconFlask = () => (
   <svg
     viewBox="0 0 24 24"
     width="18"
@@ -53,7 +61,9 @@ const IconZap = () => (
     strokeLinejoin="round"
     aria-hidden="true"
   >
-    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+    <path d="M9 3h6" />
+    <path d="M10 3v6.5L4.8 18.4A2 2 0 0 0 6.6 21.4h10.8a2 2 0 0 0 1.8-3L14 9.5V3" />
+    <path d="M7.5 15h9" />
   </svg>
 );
 
@@ -116,10 +126,10 @@ const IconSettings = () => (
 /** The primary nav entries rendered in the sidebar, in display order. */
 const TABS: Array<{ key: TabKey; label: string; href: string; icon: () => ReactElement }> = [
   { key: "overview", label: "Overview", href: "#/", icon: IconGrid },
-  { key: "traces", label: "Traces", href: "#/traces", icon: IconActivity },
-  { key: "deviations", label: "Deviations", href: "#/deviations", icon: IconZap },
-  { key: "evals", label: "Evals", href: "#/evals", icon: IconCheck },
   { key: "flows", label: "Flows", href: "#/flows", icon: IconFlow },
+  { key: "evals", label: "Rules", href: "#/evals", icon: IconCheck },
+  { key: "experiments", label: "Experiments", href: "#/experiments", icon: IconFlask },
+  { key: "traces", label: "Traces", href: "#/traces", icon: IconActivity },
 ];
 
 /** Fixed left sidebar: the Glassray Coach wordmark and section nav. */

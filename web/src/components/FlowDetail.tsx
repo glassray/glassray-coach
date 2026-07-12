@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FlowAudit, FlowClassify, FlowDetail as FlowDetailData, FlowMember } from "../api";
 import { deleteFlow, fetchFlow, fetchFlowAudit, isNotFoundError, updateFlow } from "../api";
 import { formatNumber, relativeTime, truncate } from "../format";
+import { StateChip } from "./Evals";
 import type { SelectorFields } from "./Flows";
 import { ClassifyChip, describeSelector, fieldsToSelector, SelectorFieldsGrid, selectorToFields } from "./Flows";
 
@@ -340,12 +341,19 @@ export const FlowDetail = ({ id }: { id: string }) => {
         </form>
       )}
 
-      <h2 className="section-title">Evals ({data.evals.length})</h2>
+      {/* The flow's rules, both layers together: the membership rule above
+          (definition card) picks the denominator; these assertion rules score
+          the numerator. A `proposed` rule observes; `watched` gates. */}
+      <h2 className="section-title">Rules ({data.evals.length})</h2>
       {data.evals.length === 0 ? (
         <div className="notice">
-          No evals scoped to this flow yet — create one from the{" "}
+          No assertion rules on this flow yet — save a{" "}
+          <a className="inline-link" href="#/deviations">
+            deviation
+          </a>{" "}
+          as a proposed rule, or write one from the{" "}
           <a className="inline-link" href="#/evals">
-            Evals
+            Rules
           </a>{" "}
           view and bind it here.
         </div>
@@ -355,9 +363,12 @@ export const FlowDetail = ({ id }: { id: string }) => {
             <li key={ev.id}>
               <a className="mini-row" href={`#/eval/${encodeURIComponent(ev.id)}`}>
                 <span className="mini-name">{ev.label}</span>
-                <span className={`tag${ev.autorun ? " tag-autorun" : ""}`}>
-                  {ev.autorun ? "autorun on" : "autorun off"}
-                </span>
+                <StateChip state={ev.state} />
+                {ev.threshold !== null ? (
+                  <span className="tag" title="`glassray check` gate — fails below this pass rate">
+                    gate ≥{Math.round(ev.threshold * 100)}%
+                  </span>
+                ) : null}
                 <span className="mono muted mini-age">{ev.lastRunAt ? relativeTime(ev.lastRunAt) : "never run"}</span>
               </a>
             </li>

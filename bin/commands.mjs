@@ -8,6 +8,10 @@
  * human-readable messages (errors, progress) go to stderr. Exit codes:
  * 0 success · 1 API/validation error · 2 cannot reach a Coach server.
  */
+import { spawn } from 'node:child_process';
+import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { GUIDES, MODE_ERR, bold, cross, dim, link } from './ui.mjs';
 
@@ -26,17 +30,24 @@ const WAIT_OPTIONS = { 'no-wait': { type: 'boolean', default: false }, timeout: 
 /** Per-resource usage one-liners echoed alongside validation errors. */
 const USAGE = {
   traces:
-    'glassray traces list [--q <s>] [--agent <s>] [--status ok|error] [--flow <id>] [--limit <n>] [--offset <n>] | get <id> | tail',
+    'glassray traces list [--q <s>] [--agent <s>] [--status ok|error] [--flow <id>] [--label <s>] [--limit <n>] [--offset <n>] | get <id> | tail',
   stats: 'glassray stats',
   usage: 'glassray usage',
   flows:
     "glassray flows list [--status active|archived|all] | get <id> | create --name <s> [--description <s>] [--rule <s>] [--classify selector|llm] [--selector '<json>'] [--created-by user|claude] | update <id> [--name <s>] [--description <s>] [--rule <s>|--no-rule] [--classify selector|llm] [--selector '<json>'|--no-selector] [--status active|archived] | delete <id> | audit <id> | discover [--no-wait] [--timeout <s>]",
   evals:
-    'glassray evals list | get <id> | create (--deviation <id> [--flow <id>]) or (--label <s> --rule <s> [--description <s>] [--flow <id>] [--no-autorun] [--autorun-threshold <n>]) | update <id> [--flow <id>|--no-flow] [--autorun|--no-autorun] [--autorun-threshold <n>] | run <id> [--sample <n>] [--model <s>] [--no-wait] [--timeout <s>] | delete <id>',
+    'glassray evals list | get <id> | create (--deviation <id> [--flow <id>]) or (--label <s> --rule <s> [--description <s>] [--flow <id>] [--state proposed|watched|archived] [--threshold <0..1>] [--judge <model>] [--autorun-threshold <n>]) | update <id> [--flow <id>|--no-flow] [--state <s>] [--threshold <0..1>|--no-threshold] [--judge <model>|--no-judge] [--autorun-threshold <n>] | run <id> [--sample <n>] [--model <s>] [--no-wait] [--timeout <s>] | delete <id>',
   deviations: 'glassray deviations list | get <id> | resolve <id> [--reopen]',
   discovery: 'glassray discovery run [--sample <n>] [--flow <id>] [--no-wait] [--timeout <s>]',
   fix: 'glassray fix <deviationId> [--no-wait] [--timeout <s>]',
   runs: 'glassray runs list [--limit <n>] | get <id> | cancel <id>',
+  pull: 'glassray pull [--from local|cloud] [--out glassray.yaml] | --as-fixtures [--flow <id>] [--limit <n>] [--dir glassray/fixtures] | --traces <flow> [-n <count>] [--inputs-dir glassray/inputs]',
+  push: 'glassray push [--file glassray.yaml] [--dry-run] [--prune] [--target local]',
+  check: 'glassray check [--fixtures] [--dir glassray/fixtures] [--sample <n>] [--timeout <s>]',
+  run: 'glassray run <flow> --label <name> [--file glassray.yaml]',
+  compare:
+    'glassray compare [<flow>] <baseline> <candidate> [--flow <id>] [--sample <n>] [--no-wait] [--timeout <s>] — a bare corpus is a run label; prefixed forms: agent:<name> · flow:<id> · fixtures:<dir>',
+  link: 'glassray link <project> [--endpoint <url>] [--token <t>] | link --show',
 };
 
 /**
@@ -155,6 +166,13 @@ const requireId = (resource, positionals, what = '<id>') => {
 const toInt = (resource, flag, value, min = 0) => {
   const n = Number(value);
   if (!Number.isInteger(n) || n < min) usageFail(resource, `--${flag} must be an integer >= ${min} (got "${value}")`);
+  return n;
+};
+
+/** Parse a 0..1 rate flag (e.g. --threshold 0.95) or exit 1. */
+const toRate = (resource, flag, value) => {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > 1) usageFail(resource, `--${flag} must be a number between 0 and 1 (got "${value}")`);
   return n;
 };
 
@@ -322,6 +340,7 @@ export const cmdTraces = async ({ port, args }) => {
       agent: { type: 'string' },
       status: { type: 'string' },
       flow: { type: 'string' },
+      label: { type: 'string' },
       limit: { type: 'string' },
       offset: { type: 'string' },
     });
@@ -330,6 +349,7 @@ export const cmdTraces = async ({ port, args }) => {
       agent: values.agent,
       status: values.status,
       flow: values.flow,
+      label: values.label,
       limit: values.limit,
       offset: values.offset,
     });
@@ -453,7 +473,9 @@ export const cmdEvals = async ({ port, args }) => {
         label: { type: 'string' },
         rule: { type: 'string' },
         description: { type: 'string' },
-        'no-autorun': { type: 'boolean', default: false },
+        state: { type: 'string' },
+        threshold: { type: 'string' },
+        judge: { type: 'string' },
         'autorun-threshold': { type: 'string' },
       });
       let body;
@@ -462,10 +484,12 @@ export const cmdEvals = async ({ port, args }) => {
           values.label !== undefined ||
           values.rule !== undefined ||
           values.description !== undefined ||
-          values['no-autorun'] ||
+          values.state !== undefined ||
+          values.threshold !== undefined ||
+          values.judge !== undefined ||
           values['autorun-threshold'] !== undefined
         ) {
-          usageFail('evals', '--deviation only combines with --flow (the deviation supplies the label/rule)');
+          usageFail('evals', '--deviation only combines with --flow (the deviation supplies the label/rule; it lands as a proposed rule)');
         }
         body = { deviationId: values.deviation };
       } else {
@@ -474,7 +498,9 @@ export const cmdEvals = async ({ port, args }) => {
         }
         body = { label: values.label, rule: values.rule };
         if (values.description !== undefined) body.description = values.description;
-        if (values['no-autorun']) body.autorun = false;
+        if (values.state !== undefined) body.state = values.state;
+        if (values.threshold !== undefined) body.threshold = toRate('evals', 'threshold', values.threshold);
+        if (values.judge !== undefined) body.judgeModel = values.judge;
         if (values['autorun-threshold'] !== undefined) {
           body.autorunThreshold = toInt('evals', 'autorun-threshold', values['autorun-threshold'], 1);
         }
@@ -486,18 +512,27 @@ export const cmdEvals = async ({ port, args }) => {
       const { values, positionals } = parseFlags('evals', args.slice(1), {
         flow: { type: 'string' },
         'no-flow': { type: 'boolean', default: false },
-        autorun: { type: 'boolean', default: false },
-        'no-autorun': { type: 'boolean', default: false },
+        state: { type: 'string' },
+        threshold: { type: 'string' },
+        'no-threshold': { type: 'boolean', default: false },
+        judge: { type: 'string' },
+        'no-judge': { type: 'boolean', default: false },
         'autorun-threshold': { type: 'string' },
       });
       const id = requireId('evals', positionals);
       if (values.flow !== undefined && values['no-flow']) usageFail('evals', 'pass either --flow or --no-flow, not both');
-      if (values.autorun && values['no-autorun']) usageFail('evals', 'pass either --autorun or --no-autorun, not both');
+      if (values.threshold !== undefined && values['no-threshold']) {
+        usageFail('evals', 'pass either --threshold or --no-threshold, not both');
+      }
+      if (values.judge !== undefined && values['no-judge']) usageFail('evals', 'pass either --judge or --no-judge, not both');
       const body = {};
       if (values.flow !== undefined) body.flowId = values.flow;
       if (values['no-flow']) body.flowId = null;
-      if (values.autorun) body.autorun = true;
-      if (values['no-autorun']) body.autorun = false;
+      if (values.state !== undefined) body.state = values.state;
+      if (values.threshold !== undefined) body.threshold = toRate('evals', 'threshold', values.threshold);
+      if (values['no-threshold']) body.threshold = null;
+      if (values.judge !== undefined) body.judgeModel = values.judge;
+      if (values['no-judge']) body.judgeModel = null;
       if (values['autorun-threshold'] !== undefined) {
         body.autorunThreshold = toInt('evals', 'autorun-threshold', values['autorun-threshold'], 1);
       }
@@ -576,6 +611,586 @@ export const cmdFix = async ({ port, args }) => {
   return enqueueAndWait(port, `/api/deviations/${encodeURIComponent(id)}/fix`, {}, waitOpts('fix', values), () =>
     api(port, `/api/deviations/${encodeURIComponent(id)}`),
   );
+};
+
+// ── the portable rule artifact: pull / push / check / compare ────────────────
+// (docs/portable-rule-artifact.md — glassray.yaml round-trips the flows + rules
+// between the repo and a target; fixtures freeze golden traces; check is the CI
+// gate; compare is the change-with-confidence A/B.)
+
+/** Default artifact file name, relative to the cwd. */
+const ARTIFACT_FILE = 'glassray.yaml';
+
+/** Default fixtures directory, relative to the cwd (mirrors the artifact's `fixtures.path`). */
+const FIXTURES_DIR = path.join('glassray', 'fixtures');
+
+/** CLI-side name→slug, mirroring the server's `slugify` so fixture dirs and flow slugs agree. */
+const slugifyName = (name) => {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 100)
+    .replace(/-+$/g, '');
+  return slug.length > 0 ? slug : 'unnamed';
+};
+
+/** A flow row's effective artifact slug (stored slug wins; else derived from the name). */
+const flowSlug = (flow) => flow.slug ?? slugifyName(flow.name);
+
+/** One dim status line on stderr (never stdout — that stays pure JSON). */
+const note = (message) => console.error(dim(message, MODE_ERR));
+
+/**
+ * Read a fixtures directory (one subdir per flow slug, one `<traceId>.json`
+ * OTLP envelope per trace). Returns `[{ slug, fixtures: [{ traceId, envelope }] }]`;
+ * exits 1 when the directory doesn't exist or holds no fixtures.
+ */
+const readFixturesDir = async (resource, dir) => {
+  let slugs;
+  try {
+    slugs = (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return fail(`no fixtures directory at ${dir} — run \`glassray pull --as-fixtures\` first`);
+  }
+  const groups = [];
+  for (const slug of slugs) {
+    const files = (await readdir(path.join(dir, slug))).filter((f) => f.endsWith('.json'));
+    const fixtures = [];
+    for (const file of files) {
+      const traceId = path.basename(file, '.json').toLowerCase();
+      if (!/^[0-9a-f]{32}$/.test(traceId)) {
+        console.error(`${cross()} skipping ${path.join(dir, slug, file)} — file name is not a 32-hex trace id`);
+        continue;
+      }
+      let envelope;
+      try {
+        envelope = JSON.parse(await readFile(path.join(dir, slug, file), 'utf8'));
+      } catch {
+        return fail(`${path.join(dir, slug, file)} is not valid JSON`);
+      }
+      fixtures.push({ traceId, envelope });
+    }
+    if (fixtures.length > 0) groups.push({ slug, fixtures });
+  }
+  if (groups.length === 0) return fail(`no fixtures found under ${dir} — run \`glassray pull --as-fixtures\` first`);
+  void resource;
+  return groups;
+};
+
+/**
+ * Re-ingest fixture envelopes so the server can score them: same trace ids ⇒
+ * the merge-upsert is idempotent and the corpus is exactly the committed set.
+ * Returns trace ids grouped by flow slug plus the flat union.
+ */
+const ingestFixtures = async (port, groups) => {
+  const info = await api(port, '/api/info');
+  const bySlug = new Map();
+  const all = [];
+  for (const group of groups) {
+    const ids = [];
+    for (const { traceId, envelope } of group.fixtures) {
+      await api(port, '/v1/traces', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${info.apiKey}` },
+        body: JSON.stringify(envelope),
+      });
+      ids.push(traceId);
+      all.push(traceId);
+    }
+    bySlug.set(group.slug, ids);
+  }
+  return { bySlug, all };
+};
+
+/** Default pinned-inputs directory for cloud-pulled traces (`run.inputs` per flow lives under here). */
+const INPUTS_DIR = path.join('glassray', 'inputs');
+
+/** Where `glassray link` records the cloud project ref + auth (mirrors bin/glassray.mjs's home resolution). */
+const linkFilePath = () =>
+  path.join(process.env.GLASSRAY_HOME ?? path.join(homedir(), '.glassray'), 'cloud-link.json');
+
+/** Read the cloud link, or exit 1 with the setup hint. */
+const readLink = async () => {
+  try {
+    const parsed = JSON.parse(await readFile(linkFilePath(), 'utf8'));
+    if (typeof parsed?.project === 'string' && typeof parsed?.endpoint === 'string') return parsed;
+  } catch {
+    // Fall through to the shared failure below.
+  }
+  return fail('no cloud project linked — run `glassray link <project> [--endpoint <url>] [--token <t>]` first');
+};
+
+/**
+ * GET a cloud endpoint under the linked project (bearer auth from the link
+ * file, `GLASSRAY_CLOUD_TOKEN` as the override). Exit 1 with the API's error
+ * on non-2xx, exit 2 when the endpoint is unreachable.
+ */
+const cloudGet = async (linkInfo, pathname) => {
+  const token = process.env.GLASSRAY_CLOUD_TOKEN ?? linkInfo.token;
+  let res;
+  try {
+    res = await fetch(`${linkInfo.endpoint.replace(/\/$/, '')}${pathname}`, {
+      headers: {
+        accept: 'application/json',
+        'x-glassray-project': linkInfo.project,
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+    });
+  } catch {
+    clearActiveProgress?.();
+    console.error(`${cross()} cannot reach the linked cloud endpoint ${linkInfo.endpoint}`);
+    process.exit(2);
+  }
+  const text = await res.text();
+  let body = null;
+  try {
+    body = text.length > 0 ? JSON.parse(text) : {};
+  } catch {
+    body = null;
+  }
+  if (!res.ok) {
+    fail(typeof body?.error === 'string' ? body.error : `${res.status} ${res.statusText} from cloud ${pathname}`);
+  }
+  return body ?? {};
+};
+
+/** Read the repo's existing artifact file text, or null when it doesn't exist yet. */
+const readArtifactFileText = async (file) => {
+  try {
+    return await readFile(file, 'utf8');
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Extract a trace's input for the pinned-inputs dir: the root span's input,
+ * else the first `llm` descendant's, else the input preview. Null when the
+ * trace carries none (scrubbed/truncated tracing — the fidelity caveat).
+ */
+const extractTraceInput = (view) => {
+  const nonEmpty = (v) =>
+    v !== null && v !== undefined && !(typeof v === 'string' && v.trim() === '') ? v : null;
+  const rootInput = nonEmpty(view?.tree?.input);
+  if (rootInput !== null) return rootInput;
+  const stack = view?.tree ? [view.tree] : [];
+  while (stack.length > 0) {
+    const node = stack.shift();
+    if (node?.kind === 'llm') {
+      const input = nonEmpty(node.input);
+      if (input !== null) return input;
+    }
+    if (Array.isArray(node?.children)) stack.push(...node.children);
+  }
+  return nonEmpty(view?.inputPreview);
+};
+
+/** `glassray pull` — artifact (local or cloud), `--as-fixtures` golden traces, or `--traces` real cloud corpora. */
+export const cmdPull = async ({ port, args }) => {
+  const { values } = parseFlags('pull', args, {
+    from: { type: 'string' },
+    out: { type: 'string' },
+    'as-fixtures': { type: 'boolean', default: false },
+    flow: { type: 'string' },
+    limit: { type: 'string', short: 'n' },
+    dir: { type: 'string' },
+    traces: { type: 'string' },
+    'inputs-dir': { type: 'string' },
+  });
+  if (values.from !== undefined && values.from !== 'local' && values.from !== 'cloud') {
+    usageFail('pull', `--from must be local or cloud (got "${values.from}")`);
+  }
+
+  // ── pull --traces <flow>: real cloud traces → local corpus + pinned inputs ──
+  if (values.traces !== undefined) {
+    const flowRef = values.traces;
+    const n = values.limit !== undefined ? toInt('pull', 'limit', values.limit, 1) : 30;
+    const linkInfo = await readLink();
+    const body = await cloudGet(linkInfo, `/api/flows/${encodeURIComponent(flowRef)}/traces${toQuery({ limit: n })}`);
+    const items = Array.isArray(body.items) ? body.items : [];
+    if (items.length === 0) return fail(`the cloud flow "${flowRef}" returned no traces`);
+    const info = await api(port, '/api/info');
+    const inputsDir = path.join(values['inputs-dir'] ?? INPUTS_DIR, flowRef);
+    await mkdir(inputsDir, { recursive: true });
+    let ingested = 0;
+    let inputsWritten = 0;
+    const skipped = [];
+    for (const item of items) {
+      // Real production traces land as the `production` corpus (the ingest
+      // ?label= override wins over whatever environment the trace carried).
+      await api(port, '/v1/traces?label=production', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${info.apiKey}` },
+        body: JSON.stringify(item.raw),
+      });
+      ingested += 1;
+      const detail = await api(port, `/api/traces/${encodeURIComponent(item.traceId)}`);
+      const input = extractTraceInput(detail.view);
+      if (input === null) {
+        // Fidelity caveat: scrubbed/truncated tracing can score the baseline
+        // but can't faithfully re-feed the candidate — warn, don't pin.
+        skipped.push(item.traceId);
+        console.error(`${cross()} ${item.traceId}: no extractable input (scrubbed/truncated tracing?) — skipped from ${inputsDir}`);
+        continue;
+      }
+      await writeFile(
+        path.join(inputsDir, `${item.traceId}.json`),
+        `${JSON.stringify({ traceId: item.traceId, input }, null, 2)}\n`,
+      );
+      inputsWritten += 1;
+    }
+    note(`ingested ${ingested} production trace(s) as corpus 'production'; pinned ${inputsWritten} input(s) into ${inputsDir}`);
+    if (skipped.length > 0) note(`${skipped.length} trace(s) had no extractable input — they score the baseline but won't re-run`);
+    return printJson({ flow: flowRef, ingested, label: 'production', inputsDir, inputsWritten, skippedInputs: skipped });
+  }
+
+  // ── pull --as-fixtures: freeze the matching flows' member traces ────────────
+  if (values['as-fixtures']) {
+    const dir = values.dir ?? FIXTURES_DIR;
+    const limit = values.limit !== undefined ? toInt('pull', 'limit', values.limit, 1) : undefined;
+    const flowIds = values.flow !== undefined
+      ? [values.flow]
+      : (await api(port, '/api/flows')).items.map((f) => f.id);
+    if (flowIds.length === 0) return fail('no active flows to freeze fixtures for — create a flow first');
+    const written = [];
+    for (const flowId of flowIds) {
+      const body = await api(port, `/api/flows/${encodeURIComponent(flowId)}/fixtures${toQuery({ limit })}`);
+      if (body.items.length === 0) continue;
+      const flowDir = path.join(dir, body.flow.slug);
+      await mkdir(flowDir, { recursive: true });
+      for (const item of body.items) {
+        await writeFile(path.join(flowDir, `${item.traceId}.json`), `${JSON.stringify(item.raw, null, 2)}\n`);
+      }
+      written.push({ flow: body.flow.slug, traces: body.items.length, dir: flowDir });
+      note(`froze ${body.items.length} trace(s) into ${flowDir}`);
+    }
+    if (written.length === 0) return fail('no member traces to freeze — the selected flows are empty');
+    return printJson({ written });
+  }
+
+  // ── pull the artifact (local server by default, the linked cloud with --from cloud) ──
+  if (values.flow !== undefined || values.dir !== undefined) {
+    usageFail('pull', '--flow / --dir only combine with --as-fixtures');
+  }
+  const out = values.out ?? ARTIFACT_FILE;
+  // The existing file's LOCAL-ONLY sections (run recipes, fixtures/inputs
+  // paths, project ref) survive the pull — the server does the merge.
+  const baseYaml = await readArtifactFileText(out);
+  let body;
+  if (values.from === 'cloud') {
+    const linkInfo = await readLink();
+    const cloud = await cloudGet(linkInfo, '/api/export');
+    if (cloud.artifact === undefined && cloud.yaml === undefined) {
+      return fail('the cloud export returned neither an artifact nor yaml — incompatible endpoint?');
+    }
+    body = await post(port, '/api/export', {
+      ...(cloud.artifact !== undefined ? { artifact: cloud.artifact } : {}),
+      ...(cloud.artifact === undefined && typeof cloud.yaml === 'string' ? { baseYaml: cloud.yaml } : {}),
+      ...(baseYaml !== null ? { baseYaml } : {}),
+    });
+    // The pulled rules must exist on the LOCAL server too — that's what
+    // run/compare/check score against. Apply (never prune) and report.
+    const applied = await post(port, '/api/import', { artifact: body.artifact, apply: true });
+    note(`applied to local: ${applied.summary.create} create, ${applied.summary.update} update, ${applied.summary.noop} unchanged`);
+  } else {
+    body = baseYaml !== null ? await post(port, '/api/export', { baseYaml }) : await api(port, '/api/export');
+  }
+  await writeFile(out, body.yaml);
+  note(`wrote ${out} — ${body.artifact.flows.length} flow(s), ${body.artifact.rules.length} rule(s)`);
+  return printJson(body.artifact);
+};
+
+/**
+ * `glassray run <flow> --label <x>` — execute the flow's harness-authored run
+ * recipe from glassray.yaml. Coach stays dumb: it spawns `run.command` with
+ * `GLASSRAY_ENDPOINT` / `GLASSRAY_API_KEY` / `GLASSRAY_RUN_LABEL` and counts
+ * what lands under the label; the runner owns reading `run.inputs`, calling
+ * the real flow under @glassray/tracing, and flushing before exit.
+ */
+export const cmdRun = async ({ port, args }) => {
+  const { values, positionals } = parseFlags('run', args, {
+    label: { type: 'string' },
+    file: { type: 'string' },
+  });
+  const flowRef = requireId('run', positionals, '<flow>');
+  if (values.label === undefined || values.label.trim() === '') usageFail('run', 'run requires --label <name>');
+  const label = values.label.trim();
+  const file = values.file ?? ARTIFACT_FILE;
+
+  const yaml = await readArtifactFileText(file);
+  if (yaml === null) return fail(`cannot read ${file} — author it (or \`glassray pull\`) first`);
+  const { artifact } = await post(port, '/api/artifact/parse', { yaml });
+  const flow = artifact.flows.find((f) => f.id === flowRef);
+  if (!flow) {
+    return fail(`flow "${flowRef}" is not in ${file} — flows: ${artifact.flows.map((f) => f.id).join(', ') || '(none)'}`);
+  }
+  if (!flow.run?.command) {
+    return fail(`flow "${flowRef}" has no run recipe — add \`run: { command: … }\` to it in ${file}`);
+  }
+
+  const info = await api(port, '/api/info');
+  const countForLabel = async () =>
+    (await api(port, `/api/traces${toQuery({ label, limit: 1 })}`)).total ?? 0;
+  const before = await countForLabel();
+
+  note(`running: ${flow.run.command}  (label '${label}')`);
+  const exitCode = await new Promise((resolve) => {
+    const child = spawn(flow.run.command, {
+      shell: true,
+      stdio: 'inherit',
+      env: {
+        ...process.env,
+        GLASSRAY_ENDPOINT: `http://127.0.0.1:${port}`,
+        GLASSRAY_API_KEY: info.apiKey,
+        GLASSRAY_RUN_LABEL: label,
+      },
+    });
+    child.on('error', () => resolve(127));
+    child.on('exit', (code) => resolve(code ?? 1));
+  });
+  if (exitCode !== 0) fail(`run command exited with code ${exitCode}`);
+
+  // The runner flushes before exit; give ingest a short grace window anyway.
+  let landed = 0;
+  const deadline = Date.now() + 5_000;
+  for (;;) {
+    landed = (await countForLabel()) - before;
+    if (landed > 0 || Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  if (landed <= 0) {
+    fail(`no traces landed for label '${label}' — is the runner exporting to GLASSRAY_ENDPOINT and flushing before exit?`);
+  }
+  console.error(`✓ ${landed} traces landed for label '${label}'`);
+  return printJson({ flow: flowRef, label, traces: landed });
+};
+
+/** `glassray link <project> [--endpoint <url>] [--token <t>]` — record the cloud project ref + auth in $GLASSRAY_HOME. */
+export const cmdLink = async ({ args }) => {
+  const { values, positionals } = parseFlags('link', args, {
+    endpoint: { type: 'string' },
+    token: { type: 'string' },
+    show: { type: 'boolean', default: false },
+  });
+  const file = linkFilePath();
+  if (values.show) {
+    const linkInfo = await readLink();
+    return printJson({ project: linkInfo.project, endpoint: linkInfo.endpoint, hasToken: Boolean(linkInfo.token) });
+  }
+  const project = requireId('link', positionals, '<project>');
+  const endpoint = values.endpoint ?? 'https://app.glassray.ai';
+  const record = { project, endpoint, ...(values.token !== undefined ? { token: values.token } : {}) };
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  note(`linked ${project} at ${endpoint}${values.token !== undefined ? '' : ' (no token stored — set GLASSRAY_CLOUD_TOKEN at pull time)'}`);
+  return printJson({ project, endpoint, hasToken: values.token !== undefined });
+};
+
+/** `glassray push [--file <file>] [--dry-run] [--prune] [--target local]` — reconcile the file into a target. */
+export const cmdPush = async ({ port, args }) => {
+  const { values } = parseFlags('push', args, {
+    file: { type: 'string' },
+    'dry-run': { type: 'boolean', default: false },
+    prune: { type: 'boolean', default: false },
+    target: { type: 'string' },
+  });
+  if (values.target !== undefined && values.target !== 'local') {
+    return fail(`--target ${values.target} is not available yet — only the local Coach target exists today`);
+  }
+  const file = values.file ?? ARTIFACT_FILE;
+  let yaml;
+  try {
+    yaml = await readFile(file, 'utf8');
+  } catch {
+    return fail(`cannot read ${file} — run \`glassray pull\` first, or pass --file <path>`);
+  }
+  const body = await post(port, '/api/import', { yaml, apply: !values['dry-run'], prune: values.prune });
+  // The terraform-style plan, one line per action, on stderr.
+  for (const action of body.actions) {
+    if (action.op === 'noop') continue;
+    const mark = action.op === 'create' ? '+' : action.op === 'update' ? '~' : '-';
+    const detail = action.changes.length > 0 ? ` (${action.changes.join(', ')})` : '';
+    console.error(`${mark} ${action.op} ${action.kind} ${action.id}${detail}`);
+  }
+  const { summary } = body;
+  note(
+    `${values['dry-run'] ? 'plan only (--dry-run): ' : ''}${summary.create} create, ${summary.update} update, ${summary.prune} prune, ${summary.noop} unchanged`,
+  );
+  if (!values.prune && summary.prune > 0) {
+    note(`${summary.prune} item(s) exist on the target but not in ${file} — left alone; pass --prune to archive them`);
+  }
+  return printJson(body);
+};
+
+/**
+ * `glassray check [--fixtures] [--dir <dir>] [--sample <n>] [--timeout <s>]` —
+ * run every WATCHED rule and exit non-zero on any pass-rate below its
+ * threshold (default 1.0). With --fixtures the corpus is the committed golden
+ * set (hermetic, deterministic — the CI gate); without, the flow's live members.
+ */
+export const cmdCheck = async ({ port, args }) => {
+  const { values } = parseFlags('check', args, {
+    fixtures: { type: 'boolean', default: false },
+    dir: { type: 'string' },
+    sample: { type: 'string' },
+    timeout: { type: 'string' },
+  });
+  const timeoutSec = values.timeout !== undefined ? toInt('check', 'timeout', values.timeout, 1) : DEFAULT_TIMEOUT_SEC;
+  const sampleSize = values.sample !== undefined ? toInt('check', 'sample', values.sample, 1) : undefined;
+
+  const evalList = await api(port, '/api/evals');
+  const watched = evalList.items.filter((e) => e.state === 'watched');
+  if (watched.length === 0) {
+    return fail("no watched rules to check — flip a rule to 'watched' (glassray evals update <id> --state watched)");
+  }
+
+  // Fixtures mode: re-ingest the committed set, then pin each rule's corpus to it.
+  let fixtureIds = null;
+  if (values.fixtures) {
+    const dir = values.dir ?? FIXTURES_DIR;
+    const groups = await readFixturesDir('check', dir);
+    fixtureIds = await ingestFixtures(port, groups);
+    note(`ingested ${fixtureIds.all.length} fixture trace(s) from ${dir}`);
+  } else if (values.dir !== undefined) {
+    usageFail('check', '--dir only combines with --fixtures');
+  }
+
+  // Flow slug lookup so a flow-scoped rule scores its own fixture set.
+  const flowsBySlug = values.fixtures ? (await api(port, '/api/flows?status=all')).items : [];
+  const slugByFlowId = new Map(flowsBySlug.map((f) => [f.id, flowSlug(f)]));
+
+  const results = [];
+  let breaches = 0;
+  for (const rule of watched) {
+    const body = {};
+    if (sampleSize !== undefined) body.sampleSize = sampleSize;
+    if (fixtureIds !== null) {
+      const slug = rule.flowId !== null ? slugByFlowId.get(rule.flowId) : null;
+      const ids = slug !== null && slug !== undefined ? (fixtureIds.bySlug.get(slug) ?? []) : fixtureIds.all;
+      if (ids.length === 0) {
+        breaches += 1;
+        results.push({ id: rule.id, slug: rule.slug, label: rule.label, scored: 0, passed: 0, failed: 0, passRate: null, threshold: rule.threshold ?? 1, breach: true, reason: 'no fixtures for this rule’s flow' });
+        console.error(`${cross()} ${rule.label} — no fixtures for its flow (expected ${path.join(values.dir ?? FIXTURES_DIR, slug ?? '<flow>')})`);
+        continue;
+      }
+      body.traceIds = ids;
+    }
+    const accepted = await post(port, `/api/evals/${encodeURIComponent(rule.id)}/run`, body);
+    const run = await waitForRun(port, accepted.runId, timeoutSec);
+    const scored = typeof run.stats?.scored === 'number' ? run.stats.scored : 0;
+    const passed = typeof run.stats?.passed === 'number' ? run.stats.passed : 0;
+    const failed = typeof run.stats?.failed === 'number' ? run.stats.failed : 0;
+    const passRate = scored > 0 ? passed / scored : null;
+    const threshold = rule.threshold ?? 1;
+    // Nothing scored is a breach too: a gate that silently checks nothing isn't a gate.
+    const breach = passRate === null || passRate < threshold;
+    if (breach) breaches += 1;
+    results.push({ id: rule.id, slug: rule.slug, label: rule.label, scored, passed, failed, passRate, threshold, breach });
+    const pct = passRate === null ? 'nothing scored' : `${passed}/${scored} passing (${Math.round(passRate * 100)}%)`;
+    console.error(`${breach ? cross() : '✓'} ${rule.label} — ${pct}, gate ≥${Math.round(threshold * 100)}%`);
+  }
+
+  printJson({ rules: results, breaches, corpus: values.fixtures ? 'fixtures' : 'live' });
+  process.exit(breaches > 0 ? 1 : 0);
+};
+
+/**
+ * Parse a compare corpus positional into a corpusRef. A BARE token is a run
+ * label (`baseline`, `haiku`, `production` — the `glassray run` output);
+ * prefixed forms name the other corpus kinds: `label:<x>`, `agent:<name>`,
+ * `flow:<id>`, `fixtures:<dir>`.
+ */
+const parseCorpusSpec = async (port, spec) => {
+  const sep = spec.indexOf(':');
+  if (sep === -1) {
+    if (spec.trim() === '') usageFail('compare', 'a corpus cannot be empty');
+    return { label: spec };
+  }
+  const kind = spec.slice(0, sep);
+  const value = spec.slice(sep + 1);
+  if (kind === 'label' && value) return { label: value };
+  if (kind === 'agent' && value) return { agent: value };
+  if (kind === 'flow' && value) return { flowId: value };
+  if (kind === 'fixtures' && value) {
+    const groups = await readFixturesDir('compare', value);
+    const { all } = await ingestFixtures(port, groups);
+    note(`ingested ${all.length} fixture trace(s) from ${value}`);
+    return { traceIds: all };
+  }
+  return usageFail('compare', `corpus must be a run label, label:<x>, agent:<name>, flow:<id>, or fixtures:<dir> (got "${spec}")`);
+};
+
+/** Resolve a flow reference (server id, artifact slug, or name) to the server's flow id, or exit 1. */
+const resolveFlowRef = async (port, ref) => {
+  const { items } = await api(port, '/api/flows?status=all');
+  const match =
+    items.find((f) => f.id === ref) ??
+    items.find((f) => f.slug === ref) ??
+    items.find((f) => slugifyName(f.name) === ref || f.name === ref);
+  if (!match) return fail(`no flow matches "${ref}" — known: ${items.map((f) => f.slug ?? f.id).join(', ') || '(none)'}`);
+  return match.id;
+};
+
+/** Render the compare report (a finished run's stats) as human lines on stderr. */
+const printCompareSummary = (stats) => {
+  if (!stats || !Array.isArray(stats.rules)) return;
+  const pct = (rate) => (typeof rate === 'number' ? `${Math.round(rate * 100)}%` : '—');
+  for (const rule of stats.rules) {
+    const delta =
+      typeof rule.deltaPassRate === 'number'
+        ? ` (${rule.deltaPassRate >= 0 ? '+' : ''}${Math.round(rule.deltaPassRate * 100)}pts)`
+        : '';
+    console.error(`${rule.regressed ? cross() : '✓'} ${rule.label}: ${pct(rule.baseline?.passRate)} → ${pct(rule.candidate?.passRate)}${delta}`);
+  }
+  const money = (v) => (typeof v === 'number' ? `$${v.toFixed(4)}` : '—');
+  if (stats.baseline && stats.candidate) {
+    // The headline is the price-book cost — honest even when the corpus ran on
+    // a free provider; the raw provider estimate follows in parentheses.
+    console.error(
+      dim(
+        `cost if metered: ${money(stats.baseline.estCostIfMeteredUsd)} → ${money(stats.candidate.estCostIfMeteredUsd)}` +
+          `${typeof stats.costIfMeteredDeltaUsd === 'number' ? ` (Δ ${money(stats.costIfMeteredDeltaUsd)})` : ''}` +
+          ` · est spend ${money(stats.baseline.estCostUsd)} → ${money(stats.candidate.estCostUsd)}` +
+          ` · tokens ${stats.baseline.tokensIn}/${stats.baseline.tokensOut} → ${stats.candidate.tokensIn}/${stats.candidate.tokensOut}` +
+          ` · avg latency ${stats.baseline.avgDurationMs}ms → ${stats.candidate.avgDurationMs}ms`,
+        MODE_ERR,
+      ),
+    );
+  }
+};
+
+/**
+ * `glassray compare [<flow>] <baseline> <candidate> [--sample <n>]` — the A/B
+ * over the watched rule suite. Three positionals scope the suite to one flow
+ * (by slug, id, or name); two run every watched rule. Bare corpora are run
+ * labels — the canonical model-swap invocation is
+ * `glassray compare digest baseline haiku`.
+ */
+export const cmdCompare = async ({ port, args }) => {
+  const { values, positionals } = parseFlags('compare', args, {
+    flow: { type: 'string' },
+    sample: { type: 'string' },
+    ...WAIT_OPTIONS,
+  });
+  if (positionals.length !== 2 && positionals.length !== 3) {
+    usageFail('compare', 'compare needs <baseline> <candidate>, optionally preceded by <flow>');
+  }
+  const flowRef = positionals.length === 3 ? positionals[0] : values.flow;
+  if (positionals.length === 3 && values.flow !== undefined) {
+    usageFail('compare', 'pass the flow as the first positional or as --flow, not both');
+  }
+  const [baselineSpec, candidateSpec] = positionals.slice(-2);
+  const body = {
+    baseline: await parseCorpusSpec(port, baselineSpec),
+    candidate: await parseCorpusSpec(port, candidateSpec),
+  };
+  if (flowRef !== undefined) body.flowId = await resolveFlowRef(port, flowRef);
+  if (values.sample !== undefined) body.sampleSize = toInt('compare', 'sample', values.sample, 1);
+  return enqueueAndWait(port, '/api/compare', body, waitOpts('compare', values), (run) => {
+    printCompareSummary(run.stats);
+    return run;
+  });
 };
 
 /** `glassray runs list [--limit <n>]|get <id>|cancel <id>` — background-run inspection and cancel. */

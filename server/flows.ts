@@ -165,6 +165,8 @@ export type FlowSummary = {
   classify: string;
   status: string;
   createdBy: string;
+  /** Stable artifact identity (the `glassray.yaml` flow id); null until exported/imported. */
+  slug: string | null;
   traceCount: number;
   createdAt: Date;
   updatedAt: Date;
@@ -312,6 +314,7 @@ export const listFlows = async (
     classify: r.classify,
     status: r.status,
     createdBy: r.createdBy,
+    slug: r.slug,
     traceCount: counts.get(r.id) ?? 0,
     createdAt: r.createdAt,
     updatedAt: r.updatedAt,
@@ -333,17 +336,25 @@ export type FlowMember = {
 /** Cap on members returned in a flow's detail view (newest first). */
 const DETAIL_MEMBER_CAP = 100;
 
-/** Full flow detail: the definition, its newest members, and the evals scoped to it. */
+/** An assertion rule attached to a flow, as listed in the flow's detail. */
+export type FlowRuleRef = {
+  id: string;
+  label: string;
+  rule: string;
+  /** Lifecycle: `proposed` | `watched` | `archived`. */
+  state: string;
+  /** Provenance: `deviation` or `manual`. */
+  source: string;
+  /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
+  threshold: number | null;
+  lastRunAt: Date | null;
+};
+
+/** Full flow detail: the definition (membership rule) plus its newest members and the assertion rules scoped to it. */
 export const getFlowDetail = async (
   db: CoachDb,
   id: string,
-): Promise<
-  | (FlowSummary & {
-      members: FlowMember[];
-      evals: Array<{ id: string; label: string; rule: string; autorun: boolean; lastRunAt: Date | null }>;
-    })
-  | null
-> => {
+): Promise<(FlowSummary & { members: FlowMember[]; evals: FlowRuleRef[] }) | null> => {
   const rows = await db.select().from(flows).where(eq(flows.id, id)).limit(1);
   const flow = rows[0];
   if (!flow) return null;
@@ -369,7 +380,9 @@ export const getFlowDetail = async (
         id: evals.id,
         label: evals.label,
         rule: evals.rule,
-        autorun: evals.autorun,
+        state: evals.state,
+        source: evals.source,
+        threshold: evals.threshold,
         lastRunAt: evals.lastRunAt,
       })
       .from(evals)
@@ -386,6 +399,7 @@ export const getFlowDetail = async (
     classify: flow.classify,
     status: flow.status,
     createdBy: flow.createdBy,
+    slug: flow.slug,
     traceCount: counts.get(id) ?? 0,
     createdAt: flow.createdAt,
     updatedAt: flow.updatedAt,

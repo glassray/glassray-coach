@@ -1,6 +1,6 @@
 ---
 name: glassray
-description: "Drive Glassray Coach — the local AI-agent trace debugger — from the CLI: inspect captured traces, define durable flows that scope your agent's behaviours, derive evals from the agent's own rules in code, and run the discover → fix → verify loop. Use when working on an AI agent that sends traces to a local Coach (glassray) server, or when asked about the agent's quality, failures, evals, or flows."
+description: "Drive Glassray Coach — the local AI-agent flow-improvement loop — from the CLI: derive a flow + assertion rules from the codebase, author glassray.yaml with a run recipe, pin inputs, then prove a change held with run/compare (pass rates + cost). Use when working on an AI agent that sends traces to a local Coach (glassray) server, when asked to set up glassray for a flow, or when asked about the agent's quality, failures, rules/evals, or a model swap."
 license: MIT
 compatibility: "Requires the @glassray/coach CLI and a running local Coach server (npx @glassray/coach start)"
 metadata:
@@ -8,140 +8,165 @@ metadata:
   homepage: "https://glassray.ai/docs/coach/cli"
 ---
 
-# Glassray Coach
+# Glassray Coach — the harness contract
 
-You drive a local Glassray Coach server through the `glassray` CLI. Output contract:
-stdout is the API's JSON verbatim, errors go to stderr; exit 0 = ok, 1 = API error,
-2 = no server running. Long verbs (`discovery run`, `fix`, `evals run`,
-`flows discover`) block and poll their run to completion — pass `--no-wait` only when
-you intend to poll `glassray runs get <runId>` yourself. Every command takes
+You are the intelligence of this loop. Coach's server stays lean — it ingests
+traces, scores rules, diffs corpora, and gates. **You** derive the flow and its
+rules from the codebase, author `glassray.yaml`, write the runner, pin the
+inputs, and drive the change-with-confidence loop:
+
+```sh
+glassray run <flow> --label baseline    # score the world before the change
+# … make the change (e.g. swap Sonnet → Haiku) …
+glassray run <flow> --label candidate
+glassray compare <flow> baseline candidate   # pass-rate deltas + cost deltas
+# flip passing rules proposed → watched, commit glassray.yaml, git push
+```
+
+CLI output contract: stdout is the API's JSON verbatim, errors/status go to
+stderr; exit 0 = ok, 1 = API error, 2 = no server. Every command takes
 `--port <n>` if Coach isn't on the default 5899.
 
 ## 1 · Connect
 
-Run `glassray status` and read its output — it prints whether a server answers on
-the port (the command itself always exits 0). Any data command (e.g. `glassray stats`)
-exits 2 when no server is up. If there is no server, ask the user to run
-`npx @glassray/coach start` in their own terminal — **never start it yourself**: the server
-owns the terminal and the data directory. Do not run `glassray start` or
-`glassray reset`.
+Run `glassray status` and read its output — it prints whether a server answers
+on the port. Any data command (e.g. `glassray stats`) exits 2 when no server is
+up. If there is no server, ask the user to run `npx @glassray/coach start` in
+their own terminal — **never start it yourself**. Do not run `glassray start`
+or `glassray reset`.
 
 ## 2 · Inventory first — durable state IS the memory
-
-Before creating anything:
 
 ```sh
 glassray flows list
 glassray evals list
+cat glassray.yaml 2>/dev/null
 ```
 
-Flows and evals persist across sessions — they are the cross-session memory of this
-agent's behaviours and rules. **Never re-create a flow or eval that already exists**;
-extend or tighten it instead. If a listed flow covers the behaviour you were about to
-define, you are resuming a previous session's work, not starting over.
+Flows, rules, and the artifact file persist across sessions. **Never re-create
+what already exists** — extend or tighten it. If `glassray.yaml` already
+defines the flow you were about to set up, you are resuming previous work.
 
-## 3 · Set up flows — one per behaviour
+## 3 · Set up a flow — from the codebase, not from traffic
 
-A flow is a durable, named agent behaviour with a membership definition: a
-deterministic `selector` and/or a plain-language `rule` a background LLM sweep
-classifies against. Find the agent's distinct behaviours, then scope each one:
+This is what cloud Glassray does from production traffic; you do it from code:
 
-- Read the agent's code — its tools, routes, intents, prompt branches.
-- `glassray stats` — the agent names seen in traffic.
-- `glassray traces list --limit 20` — what the traffic actually looks like.
+1. **Discover the flow.** Locate the flow's code: the entry point, its model
+   call(s), the system prompt, and the agent name the tracing uses (the
+   `service.name` / `TraceMeta.agent`). One flow = one behaviour.
+2. **Derive rules from the prompt's implicit contract.** Every constraint the
+   system prompt states or assumes is a candidate assertion rule — "always
+   answer in English", "factual, never invent", "topic is a 1-4 word label".
+   Author each as `state: proposed` (observe first; you flip to `watched` once
+   it proves stable).
+3. **Author `glassray.yaml`** — the flow (membership selector = the agent
+   name), the rules, and the local-only `run` recipe:
 
-Create one flow per behaviour with the **tightest selector that scopes it**:
+```yaml
+version: 1
+flows:
+  - id: digest
+    description: per-trace summary + language + topic
+    membership:
+      selector: { agent: trace-digest }
+    run:                                  # LOCAL-ONLY — never becomes server state
+      command: node glassray/run-digest.mjs
+      inputs: glassray/inputs/digest/
+rules:
+  - id: english-summary
+    flow: digest
+    predicate: PASS if the summary is plain English and invents nothing not in the input.
+    state: proposed
+  - id: topic-sensible
+    flow: digest
+    predicate: PASS if `topic` is a sensible 1-4 word English label.
+    state: proposed
+```
+
+4. **Write the runner** (`run.command`). It must: read every input file in
+   `run.inputs`, call the **real** flow code wrapped in `@glassray/tracing`,
+   set the trace `environment` to `process.env.GLASSRAY_RUN_LABEL`, and
+   **flush the tracer before exit** (traces that don't land before the process
+   exits are lost — `glassray run` will report zero and fail). Coach passes
+   the runner three env vars: `GLASSRAY_ENDPOINT` (point the SDK here),
+   `GLASSRAY_API_KEY`, and `GLASSRAY_RUN_LABEL`. Skeleton:
+
+```js
+// glassray/run-digest.mjs
+import { readdir, readFile } from 'node:fs/promises';
+import { init, flush } from '@glassray/tracing';   // reads GLASSRAY_ENDPOINT / GLASSRAY_API_KEY
+import { runDigest } from '../src/digest.js';       // the REAL flow code
+
+const t = init({ agent: 'trace-digest', environment: process.env.GLASSRAY_RUN_LABEL });
+for (const file of await readdir('glassray/inputs/digest/')) {
+  const { input } = JSON.parse(await readFile(`glassray/inputs/digest/${file}`, 'utf8'));
+  await runDigest(input);                           // traced by the SDK wrapper
+}
+await flush();                                      // MUST flush before exit
+```
+
+5. **Instrument tracing if missing.** Prefer a thin traced runner over editing
+   app code: wrap the flow's entry function in the runner script rather than
+   threading the SDK through the application.
+6. **Pin inputs.** No cloud: synthesize a representative set — one JSON file
+   per input in `run.inputs` (`{ "input": … }`), covering the flow's real
+   variety (languages, lengths, edge cases; ~10–30 is plenty). Have cloud:
+   `glassray pull --traces <flow> -n 30` writes real production inputs there
+   for you (and ingests the real traces as the `production` baseline corpus).
+
+Acceptance for this section: `glassray run <flow> --label baseline` works with
+no further hand-editing.
+
+## 4 · The loop — prove the change held
 
 ```sh
-glassray flows create --name "Smalltalk" \
-  --description "Greeting and chit-chat turns" \
-  --selector '{"agent":"support-bot","nameContains":"smalltalk","limit":20}'
+glassray push                             # sync glassray.yaml's rules into the server
+glassray run digest --label baseline      # score the pre-change world
+# … make the change (model swap, prompt edit, refactor) …
+glassray run digest --label candidate
+glassray compare digest baseline candidate
 ```
 
-Selector fields (JSON, AND-combined): `agent` (exact), `nameContains`
-(case-insensitive substring on the root trace name), `q` (substring on the input
-preview — the user's intent), `status` (`ok`|`error`), `traceIds` (explicit 32-hex
-pins — always members), `limit` (how many newest members an eval run samples,
-default 20). An empty selector matches every trace. Selectors are free and instant —
-matched inline at every ingest.
+Read the compare report: per-rule `passRate` baseline → candidate with
+`deltaPassRate` and `regressed`, plus each side's tokens, **`estCostIfMeteredUsd`**
+(the price-book cost — honest even on the free subscription provider; this is
+the "is it cheaper?" number), and latency. Then:
 
-Use a plain-language `--rule` (with `--classify llm`) **only when no selector
-discriminates** — e.g. "the user is asking about order status" when names and agents
-don't encode it. Rule flows cost light-tier LLM calls in the background sweep, and a
-new or changed rule only backfills over the newest ~100 traces.
+- Regressions → fix the change or accept the trade-off knowingly.
+- Green → flip the proven rules `proposed → watched` **in `glassray.yaml`**
+  and `glassray push` (that flip is the enforcement switch: watched rules
+  autorun on new traffic and gate `glassray check`).
+- Commit `glassray.yaml`, the runner, and the inputs; `git push`.
 
-`glassray flows discover` bootstraps candidate flows by clustering existing traffic —
-it only **adds** new, name-deduped, rule-defined flows. Review each candidate and
-tighten it into a selector when one exists:
+With a linked cloud project the baseline can be production itself:
+`glassray compare digest production candidate` (after `pull --traces`).
 
-```sh
-glassray flows update <id> --selector '{"agent":"support-bot","q":"refund"}' --classify selector
-```
+Caveats you must respect: if tracing scrubbed or truncated inputs, a pulled
+trace can **score** the baseline but not faithfully **re-run** the candidate —
+`pull --traces` warns and skips pinning those. If the flow has side effects or
+live state, old inputs won't reproduce it: degrade to "score the real
+baseline; candidate from fresh traffic", and say so.
 
-## 4 · Derive evals from the code — the agent's own rules
+## 5 · CI: the check gate
 
-Read the agent's system prompts, guardrails, policy docs, and tool descriptions for
-behavioural rules — "never mention competitors", "always answer in first person",
-"escalate refunds over $100". Each one becomes a flow-scoped eval; run it once to
-baseline:
-
-```sh
-glassray evals create --label "No competitor mentions" \
-  --rule "The reply must never name or recommend a competitor product." \
-  --flow <flowId>
-glassray evals run <evalId>
-```
-
-A flow-scoped eval samples the flow's newest members (capped by the flow selector's
-`limit`, default 20; `--sample` overrides per run). Autorun is on by default: once the
-flow accrues ≥ 10 new member traces since the eval's last run (`--autorun-threshold`
-tunes it), the server queues a rerun by itself — you don't have to remember.
-
-## 5 · The improvement loop
-
-```sh
-glassray discovery run [--flow <flowId>]   # LLM judge finds recurring deviations
-glassray deviations list                   # the newest discovery run's findings
-glassray deviations get <id>               # rule, severity, per-trace evidence
-glassray fix <id>                          # generates fixMarkdown, prints the deviation
-```
-
-The `fixMarkdown` is a set of instructions **addressed to you**: execute its repo
-search plan (the grep commands), open the likely files, and apply the ordered edits
-across prompt / tools / guardrails / code.
-
-Then verify:
-
-1. Have the user (or a test script) generate fresh traffic against the fixed agent.
-2. Watch it land: `glassray traces tail` (NDJSON, one line per ingested trace).
-3. Evals rerun automatically once enough new members accrue — or force it with
-   `glassray evals run <evalId>`. The printed detail has the verdicts.
-4. Green (`failed: 0`, `regressionCount: 0`) → `glassray deviations resolve <id>`.
-   Reopen with `--reopen` if it recurs.
-
-Optionally lock a deviation in directly: `glassray evals create --deviation <id>
-[--flow <flowId>]` freezes its rule as a repeatable check (idempotent — re-saving the
-same deviation returns the existing eval).
+`glassray check --fixtures` runs every **watched** rule over the committed
+golden set (`glassray pull --as-fixtures` freezes it) and exits non-zero on
+any pass rate below the rule's `threshold` (default 1.0). Deterministic — same
+committed inputs — so a red means *the change you just made* broke it. Live
+members drift; never treat live numbers as the regression gate.
 
 ## 6 · Self-correct
 
-Your flows and evals are hypotheses — audit them periodically:
+Audit your own hypotheses periodically:
 
 ```sh
-glassray flows audit <id>
+glassray flows audit <id>     # members that don't belong → tighten the selector
+glassray evals get <id>       # verdicts flip-flopping on unchanged behaviour → sharpen the predicate
 ```
 
-- `sample` contains traces that don't belong → the selector/rule is too loose;
-  tighten it with `glassray flows update` and re-check.
-- `counts.lowConfidence` piling up → the rule is ambiguous to the classifier;
-  sharpen the wording or replace it with a selector.
-- `counts.unclassifiedStoreWide` growing → the background sweep is behind (or the
-  server was down); it self-heals on the next ingest or restart.
-
-If your own eval rule proves too vague (verdicts flip-flop between runs on unchanged
-behaviour), rewrite it: the rule itself is immutable, so `glassray evals delete <id>`
-and re-create with sharper wording. `glassray evals update` only moves the flow
-binding and autorun tuning.
+A vague rule gets rewritten by editing its `predicate` in `glassray.yaml` and
+`glassray push` (the plan shows `~ update`). `glassray evals update` moves flow
+binding, `--state`, and gate tuning only.
 
 ## 7 · Reference
 
@@ -153,49 +178,52 @@ Management — for the user, mostly:
 | `glassray init [--force]` | Install this skill into `./.agents/skills/` + `./.claude/skills/`. |
 | `glassray start` / `glassray reset` | The user runs these — never you. |
 
-Data + runs (all print the API JSON; long verbs take `--no-wait --timeout`):
+The loop (stdout = API JSON; long verbs take `--no-wait --timeout`):
 
 | Command | Notes |
 | --- | --- |
-| `glassray traces list [--q --agent --status --flow --limit --offset]` | `{ items, total }`, newest first. |
-| `glassray traces get <id>` | Full span-tree view of one trace. |
-| `glassray traces tail` | NDJSON stream of traces as they land. |
-| `glassray stats` / `glassray usage` | Traffic rollups + agent names; Coach's own LLM spend. |
-| `glassray flows list [--status active\|archived\|all]` | `{ items, unclassified }`. |
-| `glassray flows get <id>` | Definition + newest members + attached evals. |
-| `glassray flows create --name [--description --rule --classify --selector '<json>' --created-by]` | → `{ id, memberCount, llmBackfill }`. |
-| `glassray flows update <id> [--name --description --rule\|--no-rule --classify --selector '<json>'\|--no-selector --status]` | Changed selector re-materializes members; new/changed llm rule backfills ~100 newest. |
-| `glassray flows delete <id>` | Memberships go; attached evals become global. |
-| `glassray flows audit <id>` | Member sample + low-confidence assignments + counts. |
-| `glassray flows discover [--no-wait --timeout]` | Cluster traffic into NEW rule-defined flows. |
-| `glassray evals list` / `glassray evals get <id>` | Rollups; detail adds verdicts + history. |
-| `glassray evals create --deviation <id> [--flow]` | Freeze a deviation's rule (idempotent). |
-| `glassray evals create --label --rule [--description --flow --no-autorun --autorun-threshold]` | Hand-written, optionally flow-scoped. |
-| `glassray evals update <id> [--flow\|--no-flow --autorun\|--no-autorun --autorun-threshold]` | Binding + autorun only — the rule is immutable. |
-| `glassray evals run <id> [--sample --model --no-wait --timeout]` | Prints the eval detail (verdicts) after the run. |
-| `glassray evals delete <id>` | Removes its stored verdicts too. |
-| `glassray deviations list` / `glassray deviations get <id>` | Newest discovery run's set; detail carries `fixMarkdown`. |
-| `glassray deviations resolve <id> [--reopen]` | Flip open ↔ resolved. |
-| `glassray discovery run [--sample --flow --no-wait --timeout]` | Find deviations, optionally flow-scoped. |
-| `glassray fix <deviationId> [--no-wait --timeout]` | Generate the fix; prints the deviation with `fixMarkdown` after. |
-| `glassray runs list [--limit]` / `runs get <id>` / `runs cancel <id>` | Queue visibility; cancel queued or active runs. |
+| `glassray run <flow> --label <x> [--file glassray.yaml]` | Spawn the flow's `run.command` with `GLASSRAY_ENDPOINT` / `GLASSRAY_API_KEY` / `GLASSRAY_RUN_LABEL`; fails if zero traces land. |
+| `glassray compare [<flow>] <baseline> <candidate> [--sample]` | Bare corpora are run labels; prefixed: `label:` `agent:` `flow:` `fixtures:<dir>`. Report = pass-rate deltas + cost. |
+| `glassray pull [--from local\|cloud] [--out]` | Serialize flows + rules into glassray.yaml. Local-only sections (`run`, fixtures/inputs paths) always survive the pull. `--from cloud` also applies the pulled rules to the local server. |
+| `glassray pull --traces <flow> [-n 30]` | Ingest real cloud traces as the `production` corpus + pin their extracted inputs into `glassray/inputs/<flow>/`. |
+| `glassray pull --as-fixtures [--flow --limit --dir]` | Freeze golden traces for the `check` gate. |
+| `glassray push [--file --dry-run --prune]` | Reconcile glassray.yaml into the target (plan on stderr; prune = archive extras). |
+| `glassray check [--fixtures --dir --sample --timeout]` | Run every watched rule; exit 1 on a threshold breach. |
+| `glassray link <project> [--endpoint --token] \| link --show` | Record the cloud project + auth for the cloud pulls. |
+
+Data + rules:
+
+| Command | Notes |
+| --- | --- |
+| `glassray traces list [--q --agent --status --flow --label --limit --offset]` / `get <id>` / `tail` | `--label` filters one run's corpus. |
+| `glassray stats` / `glassray usage` | Rollups incl. `estCostIfMeteredUsd`; Coach's own LLM spend. |
+| `glassray flows list/get/create/update/delete/audit/discover` | Durable flows; `audit` = classification quality. |
+| `glassray evals list` / `get <id>` | Rules with `state`, gate `threshold`, latest verdicts + history. |
+| `glassray evals create --label --rule [--flow --state --threshold --judge --autorun-threshold]` | Hand-written rule (default `watched`). |
+| `glassray evals create --deviation <id> [--flow]` | Promote a discovered deviation as a **proposed** rule (idempotent). |
+| `glassray evals update <id> [--flow\|--no-flow --state --threshold\|--no-threshold --judge\|--no-judge --autorun-threshold]` | Binding + lifecycle + gates. |
+| `glassray evals run <id> [--sample --model]` / `delete <id>` | One-off scoring; delete removes verdicts. |
+| `glassray deviations list/get/resolve` · `discovery run` · `fix <id>` | The discovery → fix loop (secondary to the rule loop). |
+| `glassray runs list/get/cancel` | Background-run queue visibility. |
 
 Key JSON fields to read:
 
-- Run-starting commands return `202 { runId, status: "queued"|"running" }` — never
-  409-busy; a duplicate request for the same work returns the run already in flight.
-  `runs get <id>`: `status` is `queued → running → done|error`; while a discovery or
-  eval run is running, its `stats` carries live `{ scanned, total }` progress (other
-  kinds don't publish progress); a finished eval run's `stats` records `judgeModel`.
-- `evals get <id>`: `passed` / `failed` / `regressionCount`, `results[]` sorted
-  regressions → failures → passes, each `{ traceId, verdict, evidence, regression }`;
-  `history[]` oldest → newest `{ runId, at, passed, failed, total }` — the trend.
-- `flows list`: `unclassified` = traces still awaiting the background sweep.
-- `flows audit <id>`: `counts.{members, lowConfidence, unclassifiedStoreWide}`.
+- `run` prints `{ flow, label, traces }`; the count is the traces that landed
+  for this invocation — zero is a runner bug (not exporting to
+  `GLASSRAY_ENDPOINT`, or not flushing before exit).
+- A finished compare run's `stats`: `rules[]` with per-side
+  `{ scored, passed, failed, passRate }`, `deltaPassRate`, `regressed`;
+  `baseline`/`candidate` with `tokensIn/Out`, `estCostUsd` (real spend, may be
+  $0), `estCostIfMeteredUsd` (price book — the honest number),
+  `avgDurationMs`; `costIfMeteredDeltaUsd` (negative = cheaper); `regressions`.
+- `evals get <id>`: `passed`/`failed`/`regressionCount`; `results[]` sorted
+  regressions → failures → passes; `history[]` oldest → newest.
+- Run-starting commands return `202 { runId, status }` — never 409-busy;
+  `runs get <id>` shows `queued → running → done|error` with live
+  `{ scanned, total }` progress.
 
-Model-switch recipe: when the user switches their agent's underlying model, change
-nothing in Coach — the new traffic classifies into the same flows, and autorun reruns
-each flow's evals once enough new members accrue. Compare pass rates and
-`regressionCount` across runs in the eval's `history`; to keep the judging constant
-across the comparison, pin the judge with `glassray evals run <id> --model <id>` (each
-run's `stats.judgeModel` records what scored it).
+Model-switch recipe (the canonical use): author/confirm the flow + rules, pin
+inputs, `run <flow> --label baseline`, swap the model in code,
+`run <flow> --label <new-model>`, `compare <flow> baseline <new-model>` — read
+`deltaPassRate` per rule and `estCostIfMeteredUsd` per side. To keep judging
+constant across the comparison, set `judge:` on the rules in `glassray.yaml`.

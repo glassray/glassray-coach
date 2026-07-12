@@ -35,7 +35,10 @@ const EvalVerdictSchema = z.object({
 /** Default number of traces scored per eval run. */
 const DEFAULT_EVAL_SAMPLE = 20;
 
-/** A stored eval with its rule + provenance + flow scoping. */
+/** A rule's lifecycle state: observed-only, actively gating, or retired. */
+export type RuleState = 'proposed' | 'watched' | 'archived';
+
+/** A stored eval (assertion rule) with its rule + provenance + flow scoping + lifecycle state. */
 export type EvalRecord = {
   id: string;
   label: string;
@@ -45,10 +48,16 @@ export type EvalRecord = {
   sourceDeviationId: string | null;
   /** The flow this eval is scoped to (runs sample its members); null = global. */
   flowId: string | null;
-  /** Whether the server auto-reruns this eval when its flow accrues new members. */
-  autorun: boolean;
-  /** New member traces (since the last run) needed to trigger an automatic rerun. */
+  /** Lifecycle: `proposed` (not gating) | `watched` (autoruns + gates check) | `archived`. */
+  state: string;
+  /** New member traces (since the last run) needed to trigger an automatic rerun of a watched rule. */
   autorunThreshold: number;
+  /** Pass-rate gate for `glassray check` (0..1); null = 1.0. */
+  threshold: number | null;
+  /** Preferred judge model for this rule's runs; null = the light-tier default. */
+  judgeModel: string | null;
+  /** Stable artifact identity (the `glassray.yaml` rule id); null until exported/imported. */
+  slug: string | null;
   /** When the most recent run started — the autorun watermark. */
   lastRunAt: Date | null;
   createdAt: Date;
@@ -112,6 +121,8 @@ export const createEvalFromDeviation = async (
     return already[0].id;
   }
   const id = newId('eval_');
+  // A promoted deviation starts as a PROPOSED rule: evidence seen, not yet
+  // gating — the user flips it to `watched` once they trust it.
   await db.insert(evals).values({
     id,
     label: dev.label,
@@ -120,14 +131,25 @@ export const createEvalFromDeviation = async (
     source: 'deviation',
     sourceDeviationId: dev.id,
     flowId: opts?.flowId ?? null,
+    state: 'proposed',
   });
   return id;
 };
 
-/** Create a hand-written eval from a label + rule (+ optional description / flow scope / autorun tuning). Returns the new eval id. */
+/** Create a hand-written eval from a label + rule (+ optional description / flow scope / state / gate tuning). Returns the new eval id. */
 export const createManualEval = async (
   db: CoachDb,
-  input: { label: string; rule: string; description?: string; flowId?: string; autorun?: boolean; autorunThreshold?: number },
+  input: {
+    label: string;
+    rule: string;
+    description?: string;
+    flowId?: string;
+    state?: RuleState;
+    autorunThreshold?: number;
+    threshold?: number;
+    judgeModel?: string;
+    slug?: string;
+  },
 ): Promise<string> => {
   const id = newId('eval_');
   await db.insert(evals).values({
@@ -138,22 +160,32 @@ export const createManualEval = async (
     source: 'manual',
     sourceDeviationId: null,
     flowId: input.flowId ?? null,
-    ...(input.autorun !== undefined ? { autorun: input.autorun } : {}),
+    ...(input.state !== undefined ? { state: input.state } : {}),
     ...(input.autorunThreshold !== undefined ? { autorunThreshold: input.autorunThreshold } : {}),
+    ...(input.threshold !== undefined ? { threshold: input.threshold } : {}),
+    ...(input.judgeModel !== undefined ? { judgeModel: input.judgeModel } : {}),
+    ...(input.slug !== undefined ? { slug: input.slug } : {}),
   });
   return id;
 };
 
-/** Patch an eval's flow binding / autorun tuning. Returns false when the eval doesn't exist. */
-export const updateEval = async (
-  db: CoachDb,
-  id: string,
-  patch: { flowId?: string | null; autorun?: boolean; autorunThreshold?: number },
-): Promise<boolean> => {
+/** Patch shape for an eval: flow binding, lifecycle state, and gate tuning (the rule text itself is immutable). */
+export type EvalPatch = {
+  flowId?: string | null;
+  state?: RuleState;
+  autorunThreshold?: number;
+  threshold?: number | null;
+  judgeModel?: string | null;
+};
+
+/** Patch an eval's flow binding / state / gate tuning. Returns false when the eval doesn't exist. */
+export const updateEval = async (db: CoachDb, id: string, patch: EvalPatch): Promise<boolean> => {
   const set: Partial<typeof evals.$inferInsert> = {};
   if (patch.flowId !== undefined) set.flowId = patch.flowId;
-  if (patch.autorun !== undefined) set.autorun = patch.autorun;
+  if (patch.state !== undefined) set.state = patch.state;
   if (patch.autorunThreshold !== undefined) set.autorunThreshold = patch.autorunThreshold;
+  if (patch.threshold !== undefined) set.threshold = patch.threshold;
+  if (patch.judgeModel !== undefined) set.judgeModel = patch.judgeModel;
   if (Object.keys(set).length === 0) {
     const rows = await db.select({ id: evals.id }).from(evals).where(eq(evals.id, id)).limit(1);
     return rows.length > 0;
@@ -173,15 +205,24 @@ export const deleteEval = async (db: CoachDb, evalId: string): Promise<boolean> 
 
 /**
  * Score traces against one eval's rule (light tier, per trace) and store a
- * pass/fail verdict + evidence per trace under `runId`. A flow-scoped eval
- * samples its flow's newest members (capped by the flow selector's `limit`);
- * a global eval samples the newest traces store-wide. Stamps the eval's
- * `lastRunAt` watermark at start (the autorun trigger), and records the judge
- * model in the run stats. Marks the run `done` (or `error`, re-throwing).
+ * pass/fail verdict + evidence per trace under `runId`. The corpus is either an
+ * explicit `traceIds` pin (the fixtures path — deterministic, for `check`), or
+ * a sample: a flow-scoped eval samples its flow's newest members (capped by the
+ * flow selector's `limit`), a global eval the newest traces store-wide. Stamps
+ * the eval's `lastRunAt` watermark at start (the autorun trigger), and records
+ * the judge model in the run stats. Marks the run `done` (or `error`, re-throwing).
  */
 export const runEval = async (
   db: CoachDb,
-  opts: { evalId: string; runId: string; sampleSize?: number; model?: string; signal?: AbortSignal },
+  opts: {
+    evalId: string;
+    runId: string;
+    sampleSize?: number;
+    model?: string;
+    /** Score exactly these traces (fixtures corpus) instead of sampling live members. */
+    traceIds?: string[];
+    signal?: AbortSignal;
+  },
 ): Promise<{ scored: number; passed: number; failed: number }> => {
   try {
     const evalRows = await db.select().from(evals).where(eq(evals.id, opts.evalId)).limit(1);
@@ -200,24 +241,32 @@ export const runEval = async (
     const flowLimit = flowRow ? parseSelector(flowRow.selector)?.limit : undefined;
     const sampleSize = Math.max(1, Math.min(opts.sampleSize ?? flowLimit ?? DEFAULT_EVAL_SAMPLE, 200));
 
-    // The judge model this run will use (recorded in stats for cross-run comparison).
-    const judgeModel = opts.model ?? resolveLlmConfig().lightModelId;
+    // The judge model this run will use (recorded in stats for cross-run
+    // comparison): explicit override > the rule's own judge > the light default.
+    const judgeModel = opts.model ?? ev.judgeModel ?? resolveLlmConfig().lightModelId;
 
-    // Sample the newest traces (full raw envelope needed to rebuild the view),
-    // scoped to the flow's members for a flow-bound eval.
-    const rows = await db
-      .select({ id: traces.id, raw: traces.raw })
-      .from(traces)
-      .where(
-        ev.flowId
-          ? inArray(
-              traces.id,
-              db.select({ id: flowTraces.traceId }).from(flowTraces).where(eq(flowTraces.flowId, ev.flowId)),
-            )
-          : undefined,
-      )
-      .orderBy(desc(traces.receivedAt), desc(traces.id))
-      .limit(sampleSize);
+    // The corpus: pinned trace ids (deterministic — fixtures), else the newest
+    // traces (full raw envelope needed to rebuild the view), scoped to the
+    // flow's members for a flow-bound eval.
+    const rows = opts.traceIds
+      ? await db
+          .select({ id: traces.id, raw: traces.raw })
+          .from(traces)
+          .where(inArray(traces.id, opts.traceIds.map((id) => id.toLowerCase())))
+          .orderBy(desc(traces.receivedAt), desc(traces.id))
+      : await db
+          .select({ id: traces.id, raw: traces.raw })
+          .from(traces)
+          .where(
+            ev.flowId
+              ? inArray(
+                  traces.id,
+                  db.select({ id: flowTraces.traceId }).from(flowTraces).where(eq(flowTraces.flowId, ev.flowId)),
+                )
+              : undefined,
+          )
+          .orderBy(desc(traces.receivedAt), desc(traces.id))
+          .limit(sampleSize);
 
     // Score each sampled trace against the rule (in concurrent waves; progress
     // publishes per wave, and a canceled/timed-out run stops between waves).
@@ -229,7 +278,7 @@ export const runEval = async (
         system: EVAL_SYSTEM_PROMPT,
         prompt: `Rule the agent should follow:\n"${ev.rule}"\n\nDoes the following trace COMPLY with that rule (pass) or VIOLATE it (fail)? Judge only against the rule above.\n\n${block}`,
         tier: 'light',
-        model: opts.model,
+        model: judgeModel,
         temperature: 0,
         signal: opts.signal,
       });
@@ -259,10 +308,11 @@ export const runEval = async (
 };
 
 /**
- * The evals due an automatic rerun: flow-scoped, autorun-enabled, and their
- * flow has accrued at least `autorunThreshold` member traces since the eval
- * last ran (or ever, for a never-run eval — the hands-free baseline). Called
- * after every classify sweep; the queue's per-eval dedup absorbs repeats.
+ * The evals due an automatic rerun: flow-scoped, WATCHED, and their flow has
+ * accrued at least `autorunThreshold` member traces since the eval last ran
+ * (or ever, for a never-run eval — the hands-free baseline). Called after
+ * every classify sweep; the queue's per-eval dedup absorbs repeats. Proposed
+ * and archived rules never autorun.
  */
 export const autorunDueEvals = async (db: CoachDb): Promise<Array<{ id: string; flowId: string }>> => {
   const rows = await db
@@ -270,7 +320,7 @@ export const autorunDueEvals = async (db: CoachDb): Promise<Array<{ id: string; 
     .from(evals)
     .where(
       and(
-        eq(evals.autorun, true),
+        eq(evals.state, 'watched'),
         isNotNull(evals.flowId),
         sql`(
           select count(*) from flow_traces ft

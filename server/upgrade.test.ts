@@ -101,11 +101,15 @@ describe('0.1 → 0.2 datadir upgrade', () => {
     expect(orphan.status).toBe('error');
   });
 
-  it('gives legacy evals the flow-scoping defaults', async () => {
+  it('gives legacy evals the flow-scoping + rule-lifecycle defaults', async () => {
     const ev = (await rt.db.select().from(evals).where(eq(evals.id, 'eval_old')))[0]!;
     expect(ev.flowId).toBeNull();
-    expect(ev.autorun).toBe(true);
+    // A pre-state eval had no autorun column at all — it lands as a watched rule.
+    expect(ev.state).toBe('watched');
     expect(ev.autorunThreshold).toBe(10);
+    expect(ev.threshold).toBeNull();
+    expect(ev.judgeModel).toBeNull();
+    expect(ev.slug).toBeNull();
     expect(ev.lastRunAt).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
+  CompareReport,
   DeviationItem,
   EvalSummary,
   FlowSummary,
@@ -14,6 +15,7 @@ import {
   fetchEvals,
   fetchFlows,
   fetchInfo,
+  fetchLastCompare,
   fetchStats,
   fetchTimeline,
   fetchTraces,
@@ -22,8 +24,9 @@ import {
 import { formatDuration, formatNumber, relativeTime, truncate } from "../format";
 import { useTailRefresh } from "../useTailRefresh";
 import { ActivityBars, SeverityBar, type SeverityCounts } from "./charts";
+import { parseCompareReport } from "./Compare";
 import { SeverityChip } from "./Deviations";
-import { HealthBadge } from "./Evals";
+import { HealthBadge, StateChip } from "./Evals";
 import { EmptyState, StatusDot } from "./TraceList";
 import { UsageCard } from "./UsageCard";
 
@@ -36,6 +39,8 @@ interface OverviewData {
   flows: FlowSummary[];
   recent: TraceListItem[];
   usage: UsageSummary;
+  /** The newest finished compare run's report + when it finished; null before any compare. */
+  lastCompare: { report: CompareReport; at: string | null } | null;
 }
 
 /** Compact USD cost estimate (<$0.01 shown as such). */
@@ -72,7 +77,7 @@ export const Overview = () => {
   /** Load every panel's data in one shot so the dashboard is internally consistent. */
   const load = useCallback(async () => {
     try {
-      const [stats, timeline, deviations, evals, flows, recent, usage] = await Promise.all([
+      const [stats, timeline, deviations, evals, flows, recent, usage, lastCompareRun] = await Promise.all([
         fetchStats(),
         fetchTimeline(),
         fetchDeviations(),
@@ -80,7 +85,9 @@ export const Overview = () => {
         fetchFlows(),
         fetchTraces({}, 6, 0),
         fetchUsage(),
+        fetchLastCompare().catch(() => null),
       ]);
+      const report = parseCompareReport(lastCompareRun);
       setData({
         stats,
         timeline,
@@ -89,6 +96,7 @@ export const Overview = () => {
         flows: flows.items,
         recent: recent.items,
         usage,
+        lastCompare: report ? { report, at: lastCompareRun?.finishedAt ?? null } : null,
       });
       setStatus("ready");
     } catch {
@@ -112,7 +120,7 @@ export const Overview = () => {
   if (status === "loading") return <div className="notice">Loading dashboard…</div>;
   if (status === "error" || !data) return <div className="notice notice-error">Could not reach the local Coach server.</div>;
 
-  const { stats, timeline, deviations, evals, flows, recent, usage } = data;
+  const { stats, timeline, deviations, evals, flows, recent, usage, lastCompare } = data;
   const { totals } = stats;
 
   // Nothing captured yet → the instrument-your-agent on-ramp.
@@ -120,7 +128,7 @@ export const Overview = () => {
 
   const errorRate = totals.traces > 0 ? (totals.errors / totals.traces) * 100 : 0;
   const sev = severityCounts(deviations);
-  // Roll up eval health across every saved eval.
+  // Roll up rule health across every saved rule.
   const evalHealth = evals.reduce(
     (acc, e) => {
       acc.passed += e.passed;
@@ -131,12 +139,15 @@ export const Overview = () => {
     { passed: 0, failed: 0, regressions: 0 },
   );
 
+  // The home surface leads with the RULE SUITE + the last compare (local is a
+  // test runner, not a monitoring dashboard); the activity/KPI furniture is
+  // demoted to the bottom.
   return (
     <section className="overview">
       <div className="page-head">
         <div className="page-head-text">
           <h1 className="page-title">Overview</h1>
-          <p className="page-sub">Everything your agents are doing, on this machine.</p>
+          <p className="page-sub">Your rule suite, the last compare, and what's landing — on this machine.</p>
         </div>
         <span className="list-count">
           <span className={`live-dot${live ? "" : " live-dot-off"}`} aria-hidden="true" />
@@ -144,29 +155,88 @@ export const Overview = () => {
         </span>
       </div>
 
-      <div className="panel card-pad activity-card">
+      <div className="panel card-pad">
         <div className="card-head">
-          <h2 className="card-title">Activity</h2>
-          <span className="muted">
-            {formatNumber(totals.traces)} traces · {errorRate.toFixed(errorRate < 10 ? 1 : 0)}% errors
-          </span>
+          <h2 className="card-title">Rules</h2>
+          <a className="card-link" href="#/evals">
+            View all →
+          </a>
         </div>
-        <ActivityBars points={timeline.points} from={timeline.from} to={timeline.to} />
-      </div>
-
-      <div className="kpi-row">
-        <Kpi label="Traces" value={formatNumber(totals.traces)} />
-        <Kpi label="Error rate" value={`${errorRate.toFixed(errorRate < 10 ? 1 : 0)}%`} hint={`${totals.errors} errors`} />
-        <Kpi label="Tokens" value={`${formatNumber(totals.tokensIn)}→${formatNumber(totals.tokensOut)}`} />
-        <Kpi
-          label="Est. cost"
-          value={formatCost(totals.estCostUsd)}
-          hint="estimated spend of your traced agent's own LLM calls (not Coach's analysis spend)"
-        />
-        <Kpi label="Latency p95" value={formatDuration(totals.p95DurationMs)} />
+        {evals.length === 0 ? (
+          <p className="muted card-empty">
+            No rules yet — save a deviation as a proposed rule, or write one by hand.
+          </p>
+        ) : (
+          <>
+            <div className="eval-health-row">
+              <span className="eval-health eval-health-pass">{evalHealth.passed} checks passing</span>
+              <span className={`eval-health ${evalHealth.failed > 0 ? "eval-health-fail" : "eval-health-idle"}`}>
+                {evalHealth.failed} failing
+              </span>
+              {evalHealth.regressions > 0 ? (
+                <span className="eval-health eval-health-regress">▲ {evalHealth.regressions} regressions</span>
+              ) : null}
+            </div>
+            <ul className="mini-list">
+              {evals
+                .filter((e) => e.state !== "archived")
+                .slice(0, 8)
+                .map((e) => (
+                  <li key={e.id}>
+                    <a className="mini-row" href={`#/eval/${encodeURIComponent(e.id)}`}>
+                      <span className="mini-name">{e.label}</span>
+                      <StateChip state={e.state} />
+                      <HealthBadge ev={e} />
+                    </a>
+                  </li>
+                ))}
+            </ul>
+          </>
+        )}
       </div>
 
       <div className="overview-cols">
+        <div className="panel card-pad">
+          <div className="card-head">
+            <h2 className="card-title">Last compare</h2>
+            <a className="card-link" href="#/compare">
+              Open →
+            </a>
+          </div>
+          {lastCompare === null ? (
+            <p className="muted card-empty">
+              No compare yet — run the rule suite over two corpora to change with confidence.
+            </p>
+          ) : (
+            <>
+              <div className="eval-health-row">
+                <span
+                  className={`eval-health ${lastCompare.report.regressions > 0 ? "eval-health-regress" : "eval-health-pass"}`}
+                >
+                  {lastCompare.report.regressions > 0
+                    ? `▲ ${lastCompare.report.regressions} rule(s) regressed`
+                    : "no regressions"}
+                </span>
+                {lastCompare.at ? <span className="muted">{relativeTime(lastCompare.at)}</span> : null}
+              </div>
+              <ul className="mini-list">
+                {lastCompare.report.rules.slice(0, 4).map((r) => (
+                  <li key={r.id}>
+                    <a className="mini-row" href="#/compare">
+                      <span className="mini-name">{r.label}</span>
+                      <span className="mono muted">
+                        {r.baseline.passRate === null ? "—" : `${Math.round(r.baseline.passRate * 100)}%`}
+                        {" → "}
+                        {r.candidate.passRate === null ? "—" : `${Math.round(r.candidate.passRate * 100)}%`}
+                      </span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+
         <div className="panel card-pad">
           <div className="card-head">
             <h2 className="card-title">Deviations</h2>
@@ -195,45 +265,7 @@ export const Overview = () => {
             </>
           )}
         </div>
-
-        <div className="panel card-pad">
-          <div className="card-head">
-            <h2 className="card-title">Evals</h2>
-            <a className="card-link" href="#/evals">
-              View all →
-            </a>
-          </div>
-          {evals.length === 0 ? (
-            <p className="muted card-empty">
-              No evals yet — save a deviation as a repeatable check.
-            </p>
-          ) : (
-            <>
-              <div className="eval-health-row">
-                <span className="eval-health eval-health-pass">{evalHealth.passed} checks passing</span>
-                <span className={`eval-health ${evalHealth.failed > 0 ? "eval-health-fail" : "eval-health-idle"}`}>
-                  {evalHealth.failed} failing
-                </span>
-                {evalHealth.regressions > 0 ? (
-                  <span className="eval-health eval-health-regress">▲ {evalHealth.regressions} regressions</span>
-                ) : null}
-              </div>
-              <ul className="mini-list">
-                {evals.slice(0, 4).map((e) => (
-                  <li key={e.id}>
-                    <a className="mini-row" href={`#/eval/${encodeURIComponent(e.id)}`}>
-                      <span className="mini-name">{e.label}</span>
-                      <HealthBadge ev={e} />
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </div>
       </div>
-
-      <UsageCard summary={usage} onReset={() => void load()} />
 
       <div className="panel card-pad">
         <div className="card-head">
@@ -259,6 +291,30 @@ export const Overview = () => {
           ))}
         </ul>
       </div>
+
+      <div className="panel card-pad activity-card">
+        <div className="card-head">
+          <h2 className="card-title">Activity</h2>
+          <span className="muted">
+            {formatNumber(totals.traces)} traces · {errorRate.toFixed(errorRate < 10 ? 1 : 0)}% errors
+          </span>
+        </div>
+        <ActivityBars points={timeline.points} from={timeline.from} to={timeline.to} />
+      </div>
+
+      <div className="kpi-row">
+        <Kpi label="Traces" value={formatNumber(totals.traces)} />
+        <Kpi label="Error rate" value={`${errorRate.toFixed(errorRate < 10 ? 1 : 0)}%`} hint={`${totals.errors} errors`} />
+        <Kpi label="Tokens" value={`${formatNumber(totals.tokensIn)}→${formatNumber(totals.tokensOut)}`} />
+        <Kpi
+          label="Est. cost"
+          value={formatCost(totals.estCostUsd)}
+          hint="estimated spend of your traced agent's own LLM calls (not Coach's analysis spend)"
+        />
+        <Kpi label="Latency p95" value={formatDuration(totals.p95DurationMs)} />
+      </div>
+
+      <UsageCard summary={usage} onReset={() => void load()} />
 
       {flows.length > 0 ? (
         <div className="panel card-pad">

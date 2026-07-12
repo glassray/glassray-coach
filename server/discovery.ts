@@ -145,7 +145,7 @@ export const renderTraceView = (view: TraceView, id: string): string => {
 // ── run lifecycle helpers (shared with flows.ts) ─────────────────────────────
 
 /** The background pass kinds a run can drive. */
-export type RunKind = 'discovery' | 'flows' | 'eval' | 'improver' | 'classify';
+export type RunKind = 'discovery' | 'flows' | 'eval' | 'improver' | 'classify' | 'compare';
 
 /** Create a run row (default `running`; the queue creates `queued` rows and claims them later) and return its id. */
 export const createRun = async (
@@ -177,7 +177,7 @@ export const claimQueuedRun = async (db: CoachDb, id: string): Promise<boolean> 
  * `status = 'running'` so a run already finalized as errored (a cancel or the
  * timeout backstop) is NOT resurrected to `done` by a late-completing runner.
  */
-export const finishRun = async (db: CoachDb, id: string, stats: Record<string, number | string>): Promise<void> => {
+export const finishRun = async (db: CoachDb, id: string, stats: Record<string, unknown>): Promise<void> => {
   await db
     .update(runs)
     .set({ status: 'done', finishedAt: new Date(), stats })

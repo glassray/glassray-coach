@@ -67,7 +67,16 @@ export const UsageCard = ({ summary, onReset }: { summary: UsageSummary; onReset
         {overBudget ? (
           <p className="budget-warn">Budget reached — new analysis runs are paused. Raise the cap or reset.</p>
         ) : summary.calls > 0 && spentUsd === 0 ? (
-          <p className="budget-note muted">No metered spend — running on a free provider (mock / subscription).</p>
+          <p className="budget-note muted">
+            No metered spend — running on a free provider (mock / subscription).
+            {summary.spentIfMeteredUsd > 0 ? (
+              <>
+                {" "}
+                These tokens would cost <span className="mono">{usd(summary.spentIfMeteredUsd)}</span> on a metered API
+                key.
+              </>
+            ) : null}
+          </p>
         ) : null}
       </div>
 
@@ -84,6 +93,9 @@ export const UsageCard = ({ summary, onReset }: { summary: UsageSummary; onReset
                 <th className="col-num">Calls</th>
                 <th className="col-num">Tokens</th>
                 <th className="col-num">Cost</th>
+                <th className="col-num" title="Price-book estimate: what these tokens would cost on a metered API key">
+                  If metered
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -97,6 +109,7 @@ export const UsageCard = ({ summary, onReset }: { summary: UsageSummary; onReset
                     {formatNumber(m.tokensIn)}→{formatNumber(m.tokensOut)}
                   </td>
                   <td className="col-num mono">{usd(m.costUsd)}</td>
+                  <td className="col-num mono muted">{usd(m.costIfMeteredUsd)}</td>
                 </tr>
               ))}
             </tbody>
