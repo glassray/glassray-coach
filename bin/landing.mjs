@@ -43,12 +43,24 @@ export const COMMAND_SECTIONS = [
     rows: [
       ['traces', 'list · get <id> · tail — browse and live-stream captured traces'],
       ['flows', 'list · get · create · update · delete · audit · discover'],
-      ['evals', 'list · get · create · update · run · delete'],
+      ['evals', 'list · get · create · update · run · delete — assertion rules'],
       ['deviations', 'list · get <id> · resolve <id>'],
       ['discovery run', 'Find recurring failures across recent traces'],
       ['fix <deviationId>', 'Generate a fix doc for your coding agent'],
       ['runs', 'list · get <id> · cancel <id> — background runs'],
       ['stats · usage', "Store rollups · Coach's own LLM spend vs budget"],
+    ],
+  },
+  {
+    title: 'THE RULE ARTIFACT & THE LOOP',
+    note: 'glassray.yaml — flows + rules + a run recipe; the loop: run baseline → change → run candidate → compare',
+    rows: [
+      ['pull', 'Serialize flows + rules into glassray.yaml (--from cloud · --as-fixtures · --traces <flow>)'],
+      ['push', 'Reconcile glassray.yaml into the target (--dry-run · --prune)'],
+      ['run <flow> --label <x>', "Execute the flow's run recipe; traces land under the label"],
+      ['compare <flow> <a> <b>', 'Score the rule suite over two labelled corpora — pass rate + cost delta'],
+      ['check', 'Run every watched rule; exit non-zero on a threshold breach (--fixtures)'],
+      ['link <project>', 'Record the cloud project + auth for pull --from cloud / --traces'],
     ],
   },
   {

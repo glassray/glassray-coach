@@ -4,7 +4,8 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from './app.js';
-import { bootstrap } from './bootstrap.js';
+import { bootstrap, type CoachDb } from './bootstrap.js';
+import { codeFlowsSchema, reconcileCodeFlows } from './code-explore.js';
 
 /*
  * M3 regression suite: discovery + flows on the deterministic `mock` provider.
@@ -54,6 +55,7 @@ let home: string;
 let app: FastifyInstance;
 let baseUrl: string;
 let apiKey: string;
+let db: CoachDb;
 
 /** Poll GET /api/runs/:id until it leaves `running`, or throw after the deadline. */
 const waitForRun = async (runId: string): Promise<{ status: string; stats: Record<string, number> | null }> => {
@@ -70,6 +72,7 @@ beforeAll(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'glassray-m3-'));
   const runtime = await bootstrap(home);
   apiKey = runtime.apiKey;
+  db = runtime.db;
   app = await buildApp({ runtime });
   baseUrl = await app.listen({ port: 0, host: '127.0.0.1' });
   for (const envelope of TRACES) {
@@ -169,41 +172,77 @@ describe('glassray M3 discovery + flows (mock)', () => {
     expect((await waitForRun(runId)).status).toBe('done');
   });
 
-  it('runs the flows bootstrap to done and persists durable flows (no duplicates on re-run)', async () => {
+  it('runs the code-discover pass to done — mock reads no code, so it mints nothing', async () => {
+    // Under the offline mock provider no source is read; the run must still
+    // complete cleanly (route + queue wiring), discovering zero flows.
     const start = await fetch(`${baseUrl}/api/flows/run`, { method: 'POST' });
     expect(start.status).toBe(202);
     const { runId } = (await start.json()) as { runId: string };
     const done = await waitForRun(runId);
     expect(done.status).toBe('done');
-    expect(done.stats?.flowCount).toBeGreaterThanOrEqual(1);
+    expect(done.stats?.flowCount).toBe(0);
+    expect(done.stats?.ruleCount).toBe(0);
+  });
 
-    const list = await fetch(`${baseUrl}/api/flows`);
-    const body = (await list.json()) as {
-      items: Array<{ id: string; name: string; traceCount: number; classify: string; rule: string | null }>;
-      unclassified: number;
+  it('reconciles a code-explore result into durable flows + code-anchored evals', async () => {
+    // Feed the reconcile a synthetic explore result (parsed through the real
+    // schema) — a single-agent flow with a rule, plus a system-wide rule — and
+    // assert both land with source:"code" anchors and the flow's selector.
+    const result = codeFlowsSchema.parse({
+      flows: [
+        {
+          name: 'Trace digestion',
+          description: 'Summarises each trace into a one-line digest with a language code and a topic.',
+          agentNames: ['trace-digest'],
+          codeAnchors: [{ file: 'src/watcher/digest.ts', symbol: 'generateDigest', line: 108 }],
+          rules: [
+            {
+              name: 'Summary in plain English',
+              text: 'The summary is always written in plain English regardless of source language',
+              anchors: [{ file: 'src/watcher/digest.ts', symbol: 'SYSTEM' }],
+            },
+          ],
+        },
+      ],
+      system: {
+        context: 'A background worker that digests agent traces.',
+        rules: [{ text: 'Never invent facts not present in the trace', anchors: [{ file: 'src/watcher/digest.ts' }] }],
+      },
+    });
+
+    const reconciled = await reconcileCodeFlows(db, { runId: 'run_codeexplore_test', result });
+    expect(reconciled).toEqual({ flowCount: 1, ruleCount: 2 });
+
+    // The flow: a deterministic single-agent selector, provenance = discovery.
+    const list = (await (await fetch(`${baseUrl}/api/flows`)).json()) as {
+      items: Array<{ id: string; name: string; classify: string; selector: { agent?: string } | null; createdBy: string }>;
     };
-    expect(body.items.length).toBeGreaterThanOrEqual(1);
-    const first = body.items[0]!;
-    expect(first.traceCount).toBeGreaterThanOrEqual(1);
-    expect(first.classify).toBe('llm');
-    expect(first.rule).toBeTruthy();
+    const flow = list.items.find((f) => f.name === 'Trace digestion');
+    expect(flow).toBeTruthy();
+    expect(flow!.classify).toBe('selector');
+    expect(flow!.selector?.agent).toBe('trace-digest');
+    expect(flow!.createdBy).toBe('discovery');
 
-    const detail = await fetch(`${baseUrl}/api/flows/${first.id}`);
-    const detailBody = (await detail.json()) as {
-      id: string;
-      members: Array<{ traceId: string; assignedBy: string }>;
+    // The flow's rule is a code-anchored eval (source:"code").
+    const detail = (await (await fetch(`${baseUrl}/api/flows/${flow!.id}`)).json()) as {
+      evals: Array<{ name: string; source: string; anchors: Array<{ file: string; symbol?: string }> | null }>;
     };
-    expect(detailBody.id).toBe(first.id);
-    expect(detailBody.members.length).toBeGreaterThanOrEqual(1);
-    expect(detailBody.members[0]!.assignedBy).toBe('llm');
+    expect(detail.evals.length).toBe(1);
+    expect(detail.evals[0]!.source).toBe('code');
+    expect(detail.evals[0]!.anchors?.[0]?.file).toBe('src/watcher/digest.ts');
 
-    // Re-running the bootstrap must EXTEND the durable set, not duplicate it —
-    // the mock re-proposes the same flow name, which is name-deduped to zero.
-    const again = await fetch(`${baseUrl}/api/flows/run`, { method: 'POST' });
-    const rerun = await waitForRun(((await again.json()) as { runId: string }).runId);
-    expect(rerun.status).toBe('done');
-    expect(rerun.stats?.flowCount).toBe(0);
-    const after = (await (await fetch(`${baseUrl}/api/flows`)).json()) as { items: unknown[] };
-    expect(after.items.length).toBe(body.items.length);
+    // The system-wide rule landed as a GLOBAL code eval (no flow binding).
+    const evalsList = (await (await fetch(`${baseUrl}/api/evals`)).json()) as {
+      items: Array<{ name: string; text: string; source: string; flowId: string | null }>;
+    };
+    const globalRule = evalsList.items.find((e) => e.text.startsWith('Never invent facts'));
+    expect(globalRule).toBeTruthy();
+    expect(globalRule!.source).toBe('code');
+    expect(globalRule!.flowId).toBeNull();
+
+    // A re-reconcile of the same result EXTENDS, not duplicates: name-colliding
+    // flow skipped, text-duplicate global rule skipped → nothing new.
+    const again = await reconcileCodeFlows(db, { runId: 'run_codeexplore_test2', result });
+    expect(again).toEqual({ flowCount: 0, ruleCount: 0 });
   });
 });

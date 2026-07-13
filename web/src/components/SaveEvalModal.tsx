@@ -53,8 +53,8 @@ export const SaveEvalModal = ({
     setError(null);
     try {
       const { id } = await createEval({
-        label: label.trim(),
-        rule: rule.trim(),
+        name: label.trim(),
+        text: rule.trim(),
         flowId: flowId || undefined,
       });
       window.location.hash = `#/eval/${encodeURIComponent(id)}`;
@@ -70,7 +70,7 @@ export const SaveEvalModal = ({
       <div className="modal save-eval-modal" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <header className="modal-head">
           <div className="modal-title-row">
-            <h2 className="modal-title">Save as eval</h2>
+            <h2 className="modal-title">Save as rule</h2>
             <span className="muted">{selected ? selected.name || "span" : trace.name || "trace"}</span>
           </div>
           <button className="modal-close" type="button" onClick={onClose} aria-label="Close">
@@ -150,7 +150,7 @@ export const SaveEvalModal = ({
                   Saving…
                 </>
               ) : (
-                "Save eval"
+                "Save rule"
               )}
             </button>
           </div>

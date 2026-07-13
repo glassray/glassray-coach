@@ -132,7 +132,7 @@ describe('glassray init installs the skill to both standard locations', () => {
 describe('landing screen', () => {
   it('documents every dispatchable command word', () => {
     const text = renderLanding({ port: 5899, probe: { running: false }, width: 80, mode: 'plain' });
-    const resourceCommands = ['traces', 'stats', 'usage', 'flows', 'evals', 'deviations', 'discovery', 'fix', 'runs'];
+    const resourceCommands = ['traces', 'stats', 'usage', 'flows', 'evals', 'deviations', 'discovery', 'fix', 'runs', 'pull', 'push', 'check', 'compare', 'run', 'link'];
     const visibleManagement = MANAGEMENT_COMMANDS.filter((c) => c !== 'help' && c !== 'mcp');
     for (const word of [...resourceCommands, ...visibleManagement]) {
       expect(text, `landing must mention "${word}"`).toContain(word);
@@ -157,6 +157,12 @@ describe('landing screen', () => {
       'fix',
       'runs',
       'reset',
+      'pull',
+      'push',
+      'check',
+      'compare',
+      'run',
+      'link',
     ]);
     for (const section of COMMAND_SECTIONS) {
       for (const [cell] of section.rows) {

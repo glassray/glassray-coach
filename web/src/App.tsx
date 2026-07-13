@@ -9,6 +9,9 @@ import { Flows } from "./components/Flows";
 import { FlowDetail } from "./components/FlowDetail";
 import { Evals } from "./components/Evals";
 import { EvalDetail } from "./components/EvalDetail";
+import { Compare } from "./components/Compare";
+import { Experiments } from "./components/Experiments";
+import { ExperimentDetail } from "./components/ExperimentDetail";
 import { Overview } from "./components/Overview";
 import { Settings } from "./components/Settings";
 
@@ -23,6 +26,9 @@ type Route =
   | { name: "flow"; id: string }
   | { name: "evals" }
   | { name: "eval"; id: string }
+  | { name: "compare" }
+  | { name: "experiments" }
+  | { name: "experiment"; id: string }
   | { name: "settings" };
 
 /** Decode a hash id segment, tolerating malformed percent-encoding (returns it raw). */
@@ -45,10 +51,14 @@ const parseHash = (): Route => {
   if (flowId) return { name: "flow", id: decodeSegment(flowId) };
   const evalId = /^\/eval\/(.+)$/.exec(hash)?.[1];
   if (evalId) return { name: "eval", id: decodeSegment(evalId) };
+  const experimentId = /^\/experiment\/(.+)$/.exec(hash)?.[1];
+  if (experimentId) return { name: "experiment", id: decodeSegment(experimentId) };
+  if (hash === "/experiments") return { name: "experiments" };
   if (hash === "/traces") return { name: "list" };
   if (hash === "/deviations") return { name: "deviations" };
   if (hash === "/flows") return { name: "flows" };
   if (hash === "/evals") return { name: "evals" };
+  if (hash === "/compare") return { name: "compare" };
   if (hash === "/settings") return { name: "settings" };
   return { name: "overview" };
 };
@@ -59,6 +69,8 @@ const tabFor = (route: Route): TabKey => {
   if (route.name === "deviations" || route.name === "deviation") return "deviations";
   if (route.name === "flows" || route.name === "flow") return "flows";
   if (route.name === "evals" || route.name === "eval") return "evals";
+  if (route.name === "compare" || route.name === "experiments" || route.name === "experiment")
+    return "experiments";
   if (route.name === "settings") return "settings";
   return "overview";
 };
@@ -82,6 +94,12 @@ const renderRoute = (route: Route) => {
       return <Evals />;
     case "eval":
       return <EvalDetail id={route.id} />;
+    case "compare":
+      return <Compare />;
+    case "experiments":
+      return <Experiments />;
+    case "experiment":
+      return <ExperimentDetail id={route.id} />;
     case "settings":
       return <Settings />;
     default:

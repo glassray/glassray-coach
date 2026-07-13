@@ -4,7 +4,7 @@ import { deleteEval, fetchEval, fetchFlows, fetchRun, isNotFoundError, runEval, 
 import { plural, readStat, relativeTime, truncate } from "../format";
 import { useRun } from "../useRun";
 import { PassRateTrend } from "./charts";
-import { FlowChip } from "./Evals";
+import { FlowChip, SourceChip } from "./Evals";
 import { RunBar } from "./RunBar";
 
 /** A pass/fail verdict pill for one scored trace. */
@@ -31,6 +31,8 @@ export const EvalDetail = ({ id }: { id: string }) => {
   /** The judge model recorded in the latest run's stats, when present. */
   const [judgeModel, setJudgeModel] = useState<string | null>(null);
   const [threshold, setThreshold] = useState("");
+  /** The check gate field (0..1 pass rate); empty = 1.0 (any failure breaches). */
+  const [gate, setGate] = useState("");
   const [patchBusy, setPatchBusy] = useState(false);
   const [patchError, setPatchError] = useState<string | null>(null);
   /** The id the currently-displayed data belongs to, so a late response for a prior id is ignored. */
@@ -43,6 +45,7 @@ export const EvalDetail = ({ id }: { id: string }) => {
       if (shownId.current !== id) return;
       setData(res);
       setThreshold(String(res.autorunThreshold));
+      setGate(res.threshold === null ? "" : String(res.threshold));
       setStatus("ready");
       // The judge model lives in the scoring run's stats, not on the eval row.
       const run = res.latestRunId ? await fetchRun(res.latestRunId).catch(() => null) : null;
@@ -72,9 +75,14 @@ export const EvalDetail = ({ id }: { id: string }) => {
   /** Serializes PATCHes so an interaction during an in-flight save queues behind it instead of being dropped. */
   const patchChain = useRef<Promise<void>>(Promise.resolve());
 
-  /** PATCH one scope/autorun change (queued behind any in-flight save) and adopt the refreshed detail. */
+  /** PATCH one scope/source/gate change (queued behind any in-flight save) and adopt the refreshed detail. */
   const applyPatch = useCallback(
-    (patch: { flowId?: string | null; autorun?: boolean; autorunThreshold?: number }): Promise<void> => {
+    (patch: {
+      flowId?: string | null;
+      anchors?: import("../api").Anchor[] | null;
+      autorunThreshold?: number;
+      threshold?: number | null;
+    }): Promise<void> => {
       const run = async () => {
         setPatchBusy(true);
         setPatchError(null);
@@ -83,6 +91,7 @@ export const EvalDetail = ({ id }: { id: string }) => {
           if (shownId.current !== id) return;
           setData(res);
           setThreshold(String(res.autorunThreshold));
+          setGate(res.threshold === null ? "" : String(res.threshold));
         } catch (err) {
           setPatchError(err instanceof Error ? err.message : "Could not update the eval.");
         } finally {
@@ -105,6 +114,21 @@ export const EvalDetail = ({ id }: { id: string }) => {
       setThreshold(String(data.autorunThreshold));
     }
   }, [data, threshold, applyPatch]);
+
+  /** Commit the check-gate field on blur: empty clears to null (= 1.0), a 0..1 number saves; else snap back. */
+  const commitGate = useCallback(() => {
+    if (!data) return;
+    if (gate.trim() === "") {
+      if (data.threshold !== null) void applyPatch({ threshold: null });
+      return;
+    }
+    const parsed = Number(gate);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1 && parsed !== data.threshold) {
+      void applyPatch({ threshold: parsed });
+    } else {
+      setGate(data.threshold === null ? "" : String(data.threshold));
+    }
+  }, [data, gate, applyPatch]);
 
   /** Start an eval run, forwarding the sample size only when it parses to a positive integer. */
   const trigger = useCallback(() => {
@@ -138,7 +162,7 @@ export const EvalDetail = ({ id }: { id: string }) => {
     return (
       <section className="detail">
         <a className="back" href="#/evals">
-          ← All evals
+          ← All rules
         </a>
         <div className="notice notice-error">
           {missing ? "Eval not found." : "Could not reach the local Coach server."}
@@ -152,23 +176,24 @@ export const EvalDetail = ({ id }: { id: string }) => {
   return (
     <section className="detail">
       <a className="back" href="#/evals">
-        ← All evals
+        ← All rules
       </a>
 
       <header className="detail-head">
         <div className="detail-title-row">
-          <h1 className="detail-title">{data.label}</h1>
-          {data.source === "deviation" && data.sourceDeviationId ? (
+          <h1 className="detail-title">{data.name}</h1>
+          {data.sourceDeviationId ? (
             <a
               className="eval-source eval-source-deviation eval-source-link"
               href={`#/deviation/${encodeURIComponent(data.sourceDeviationId)}`}
-              title="View the deviation this eval was saved from"
+              title="View the deviation this eval was promoted from"
             >
               deviation ↗
             </a>
           ) : (
             <span className={`eval-source eval-source-${data.source}`}>{data.source}</span>
           )}
+          <SourceChip anchors={data.anchors} />
           {data.flowId ? (
             <FlowChip flowId={data.flowId} flowName={flows.find((f) => f.id === data.flowId)?.name} />
           ) : null}
@@ -177,7 +202,7 @@ export const EvalDetail = ({ id }: { id: string }) => {
         {data.description ? <p className="detail-sub">{data.description}</p> : null}
         <div className="callout">
           <div className="callout-label">Rule</div>
-          <div className="callout-body">{data.rule}</div>
+          <div className="callout-body">{data.text}</div>
         </div>
 
         <div className="panel card-pad eval-scope">
@@ -204,16 +229,24 @@ export const EvalDetail = ({ id }: { id: string }) => {
                   ))}
               </select>
             </div>
-            <label className="eval-autorun-toggle" htmlFor="ed-autorun" title="Rerun automatically when the flow accrues new member traces">
+            <div className="new-eval-field">
+              <label className="new-eval-label" htmlFor="ed-gate" title="`glassray check` fails when the pass rate drops below this (empty = 1.0, any failure breaches)">
+                Check gate (pass rate)
+              </label>
               <input
-                id="ed-autorun"
-                type="checkbox"
-                checked={data.autorun}
-                disabled={patchBusy || !data.flowId}
-                onChange={(e) => void applyPatch({ autorun: e.target.checked })}
+                id="ed-gate"
+                className="new-eval-input eval-threshold"
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                placeholder="1.0"
+                value={gate}
+                disabled={patchBusy}
+                onChange={(e) => setGate(e.target.value)}
+                onBlur={commitGate}
               />
-              Autorun
-            </label>
+            </div>
             <div className="new-eval-field">
               <label className="new-eval-label" htmlFor="ed-threshold">
                 New members to trigger
@@ -232,7 +265,7 @@ export const EvalDetail = ({ id }: { id: string }) => {
             </div>
           </div>
           {!data.flowId ? (
-            <p className="muted">Autorun needs a flow scope — bind this eval to a flow to rerun it hands-free.</p>
+            <p className="muted">Autorun needs a flow scope — bind this rule to a flow to rerun it hands-free.</p>
           ) : null}
           {patchError ? <p className="runbar-error">{patchError}</p> : null}
         </div>

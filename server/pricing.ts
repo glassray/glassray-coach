@@ -23,12 +23,47 @@ export const estimateCostUsd = (
   return (tokensIn / 1_000_000) * price.inPerM + (tokensOut / 1_000_000) * price.outPerM;
 };
 
-/** Input / output USD per 1M tokens for the specific model ids Coach dispatches to (heavier than the blended rate). */
-const MODEL_PRICING: Record<string, { inPerM: number; outPerM: number }> = {
+/**
+ * The PRICE BOOK: input / output USD per 1M tokens per model id. This is what
+ * "cost if metered" is computed from — the honesty fix that lets a model swap
+ * answer "is it cheaper?" even on the free `claude-subscription` provider.
+ * Update as list prices move.
+ */
+export const MODEL_PRICING: Record<string, { inPerM: number; outPerM: number }> = {
   'claude-opus-4-8': { inPerM: 15, outPerM: 75 },
+  'claude-opus-4-6': { inPerM: 15, outPerM: 75 },
   'claude-sonnet-4-6': { inPerM: 3, outPerM: 15 },
+  'claude-haiku-4-5': { inPerM: 1, outPerM: 5 },
   'gpt-4o': { inPerM: 2.5, outPerM: 10 },
   'gpt-4o-mini': { inPerM: 0.15, outPerM: 0.6 },
+};
+
+/** Longest-prefix match into the price book, so dated ids (`claude-haiku-4-5-20251001`) still price. */
+const priceForModel = (model: string): { inPerM: number; outPerM: number } | null => {
+  if (MODEL_PRICING[model]) return MODEL_PRICING[model];
+  for (const [id, price] of Object.entries(MODEL_PRICING)) {
+    if (model.startsWith(id)) return price;
+  }
+  // Family fallback: an unknown Claude/GPT id gets the provider's blended rate.
+  if (model.startsWith('claude')) return PROVIDER_PRICING.anthropic ?? null;
+  if (model.startsWith('gpt') || model.startsWith('o')) return PROVIDER_PRICING.openai ?? null;
+  return null;
+};
+
+/**
+ * USD this token bucket WOULD cost on a metered API key, regardless of the
+ * provider that actually served it — priced from the model id alone. This is
+ * the "cost if metered" figure shown next to $0 subscription/mock spend, so a
+ * model-swap comparison is never theater. 0 when the model can't be priced.
+ */
+export const estimateCostIfMetered = (
+  model: string | null,
+  tokensIn: number,
+  tokensOut: number,
+): number => {
+  const price = model ? priceForModel(model) : null;
+  if (!price) return 0;
+  return (tokensIn / 1_000_000) * price.inPerM + (tokensOut / 1_000_000) * price.outPerM;
 };
 
 /** Providers whose token spend costs the developer real money (metered API keys). */

@@ -9,7 +9,7 @@ import {
   type GeneratedObject,
   type GeneratedText,
 } from './llm.js';
-import { estimateCostForModel } from './pricing.js';
+import { estimateCostForModel, estimateCostIfMetered } from './pricing.js';
 import { getSettings } from './settings.js';
 import { llmUsage } from './schema.js';
 
@@ -23,7 +23,7 @@ import { llmUsage } from './schema.js';
  */
 
 /** What an LLM call was for — the usage `kind` column. */
-export type UsageKind = 'discovery' | 'eval' | 'flows' | 'replay' | 'improver' | 'classify';
+export type UsageKind = 'discovery' | 'eval' | 'flows' | 'replay' | 'improver' | 'classify' | 'compare';
 
 /** Default spend cap in USD when GLASSRAY_LLM_BUDGET_USD is unset. */
 const DEFAULT_BUDGET_USD = 50;
@@ -132,6 +132,8 @@ export type ModelUsage = {
   tokensIn: number;
   tokensOut: number;
   costUsd: number;
+  /** What these tokens WOULD cost on a metered key (the price book) — honest even at $0 actual. */
+  costIfMeteredUsd: number;
 };
 
 /** The usage summary surfaced at GET /api/usage (budget meter + per-model / per-kind breakdown). */
@@ -139,6 +141,8 @@ export type UsageSummary = {
   /** The cap in USD, or null when unlimited (opt-out). */
   budgetUsd: number | null;
   spentUsd: number;
+  /** What the recorded tokens WOULD have cost on metered API keys (price-book estimate). */
+  spentIfMeteredUsd: number;
   /** Remaining USD, or null when unlimited. */
   remainingUsd: number | null;
   overBudget: boolean;
@@ -185,15 +189,22 @@ export const getUsageSummary = async (db: CoachDb): Promise<UsageSummary> => {
   const t = totals[0] ?? { calls: 0, tokensIn: 0, tokensOut: 0, spent: 0 };
   const budget = resolveBudgetUsd();
   const unlimited = !Number.isFinite(budget);
+  // Price every model bucket through the price book so "is it cheaper?" is
+  // answerable even when the actual spend is $0 (subscription / mock).
+  const pricedByModel = byModel.map((m) => ({
+    ...m,
+    costIfMeteredUsd: estimateCostIfMetered(m.model, m.tokensIn, m.tokensOut),
+  }));
   return {
     budgetUsd: unlimited ? null : budget,
     spentUsd: t.spent,
+    spentIfMeteredUsd: pricedByModel.reduce((sum, m) => sum + m.costIfMeteredUsd, 0),
     remainingUsd: unlimited ? null : Math.max(0, budget - t.spent),
     overBudget: !unlimited && t.spent >= budget,
     calls: t.calls,
     tokensIn: t.tokensIn,
     tokensOut: t.tokensOut,
-    byModel,
+    byModel: pricedByModel,
     byKind,
   };
 };

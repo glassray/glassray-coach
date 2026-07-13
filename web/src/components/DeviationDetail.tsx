@@ -14,7 +14,7 @@ import { SeverityChip } from "./Deviations";
 import { RunBar } from "./RunBar";
 
 /** Success line for a finished fix-generation run. */
-const describeFix = (): string => "Fix generated — apply the steps in your coding agent, then Save as eval and re-run to verify.";
+const describeFix = (): string => "Fix generated — apply the steps in your coding agent, then Save as rule and re-run to verify.";
 
 /**
  * Render the fix instruction markdown with a light touch: `## ` lines become
@@ -154,8 +154,14 @@ export const DeviationDetail = ({ id }: { id: string }) => {
           <button className="btn detail-title-action" type="button" onClick={onToggleResolved} disabled={resolving}>
             {resolving ? "Saving…" : resolved ? "Reopen" : "Mark resolved"}
           </button>
-          <button className="btn detail-title-action" type="button" onClick={onSaveAsEval} disabled={saving}>
-            {saving ? "Saving…" : "Save as eval"}
+          <button
+            className="btn detail-title-action"
+            type="button"
+            onClick={onSaveAsEval}
+            disabled={saving}
+            title="Promote this deviation into a proposed assertion rule — watch it once you trust it"
+          >
+            {saving ? "Saving…" : "Save as rule"}
           </button>
         </div>
         {deviation.description ? <p className="detail-sub">{deviation.description}</p> : null}
@@ -191,7 +197,7 @@ export const DeviationDetail = ({ id }: { id: string }) => {
       ) : (
         <div className="notice">
           No fix yet. Generate one to get step-by-step instructions you can paste into your coding agent, then Save as
-          eval to verify the fix holds.
+          rule to verify the fix holds.
         </div>
       )}
 

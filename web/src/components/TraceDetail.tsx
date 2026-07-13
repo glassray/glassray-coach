@@ -185,7 +185,7 @@ export const TraceDetail = ({ id }: { id: string }) => {
             onClick={() => setSavingEval(true)}
             title="Turn this trace into a repeatable pass/fail check"
           >
-            Save as eval
+            Save as rule
           </button>
         </div>
         <div className="stat-grid">

@@ -1,7 +1,31 @@
 import { useCallback, useEffect, useState } from "react";
-import type { EvalSummary, FlowSummary } from "../api";
+import type { Anchor, EvalSummary, FlowSummary } from "../api";
 import { createEval, fetchEvals, fetchFlows } from "../api";
 import { formatNumber, relativeTime } from "../format";
+
+/**
+ * Provenance chip for a rule: the repo path its first code anchor points at
+ * (`from watcher/digest.ts`) when it's read from code, else a muted `custom`
+ * tag. Every rule is active — this replaces the retired lifecycle.
+ */
+export const SourceChip = ({ anchors, compact = false }: { anchors: Anchor[] | null; compact?: boolean }) => {
+  const file = anchors?.[0]?.file ?? null;
+  if (!file) {
+    return (
+      <span className="source-chip source-chip-custom" title="Custom — hand-written, not tied to a file">
+        custom
+      </span>
+    );
+  }
+  // Compact = just the file's basename (dense lists where one file repeats); the
+  // full path stays on hover so nothing is lost.
+  const shown = compact ? (file.split(/[\\/]/).pop() ?? file) : file;
+  return (
+    <span className="source-chip" title={`Derived from ${file} — approve by reviewing glassray.yaml`}>
+      from <span className="source-chip-file">{shown}</span>
+    </span>
+  );
+};
 
 /** A compact pass/fail proportion bar for one eval's latest run (empty when never run). */
 const ResultBar = ({ passed, failed }: { passed: number; failed: number }) => {
@@ -42,7 +66,7 @@ export const FlowChip = ({ flowId, flowName }: { flowId: string | null; flowName
   );
 };
 
-/** Inline "new eval" form — a hand-written label + rule (+ optional description / flow scope). */
+/** Inline "new rule" form — a hand-written (custom) label + rule (+ optional description / flow scope). */
 const NewEvalForm = ({ flows, onCreated }: { flows: FlowSummary[]; onCreated: () => void }) => {
   const [label, setLabel] = useState("");
   const [rule, setRule] = useState("");
@@ -51,7 +75,7 @@ const NewEvalForm = ({ flows, onCreated }: { flows: FlowSummary[]; onCreated: ()
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /** Submit the form: create the eval, reset, and let the parent refresh. */
+  /** Submit the form: create the (custom) eval, reset, and let the parent refresh. */
   const submit = useCallback(
     async (event: React.FormEvent) => {
       event.preventDefault();
@@ -60,8 +84,8 @@ const NewEvalForm = ({ flows, onCreated }: { flows: FlowSummary[]; onCreated: ()
       setError(null);
       try {
         await createEval({
-          label: label.trim(),
-          rule: rule.trim(),
+          name: label.trim(),
+          text: rule.trim(),
           description: description.trim() || undefined,
           flowId: flowId || undefined,
         });
@@ -140,7 +164,7 @@ const NewEvalForm = ({ flows, onCreated }: { flows: FlowSummary[]; onCreated: ()
       {error ? <p className="runbar-error">{error}</p> : null}
       <div className="new-eval-actions">
         <button className="btn" type="submit" disabled={busy || !label.trim() || !rule.trim()}>
-          {busy ? "Creating…" : "Create eval"}
+          {busy ? "Creating…" : "Create rule"}
         </button>
       </div>
     </form>
@@ -184,20 +208,21 @@ export const Evals = () => {
 
   const newButton = (
     <button className="btn" type="button" onClick={() => setShowForm((v) => !v)}>
-      {showForm ? "Close" : "New eval"}
+      {showForm ? "Close" : "New rule"}
     </button>
   );
 
   if (items.length === 0 && !showForm) {
     return (
       <div className="empty">
-        <h2 className="empty-title">No evals yet</h2>
+        <h2 className="empty-title">No rules yet</h2>
         <p className="empty-sub">
           Turn a recurring problem into a repeatable check: open a{" "}
           <a className="inline-link" href="#/deviations">
             deviation
           </a>{" "}
-          and “Save as eval”, or write a rule by hand.
+          and “Save as rule”, or write one by hand. Every rule autoruns and gates{" "}
+          <span className="mono">glassray check</span>.
         </p>
         <div className="empty-actions">{newButton}</div>
       </div>
@@ -208,8 +233,10 @@ export const Evals = () => {
     <section className="list">
       <div className="page-head">
         <div className="page-head-text">
-          <h1 className="page-title">Evals</h1>
-          <p className="page-sub">Rules you re-check against new traces — watch for regressions over time.</p>
+          <h1 className="page-title">Rules</h1>
+          <p className="page-sub">
+            Assertion rules re-checked against new traces — every rule is active; each is linked to a file or custom.
+          </p>
         </div>
         {newButton}
       </div>
@@ -217,13 +244,14 @@ export const Evals = () => {
         <NewEvalForm flows={flows.filter((f) => f.status === "active")} onCreated={onCreated} />
       ) : null}
       {items.length === 0 ? (
-        <div className="notice">No evals yet — create one above.</div>
+        <div className="notice">No rules yet — create one above.</div>
       ) : (
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
-                <th>Eval</th>
+                <th>Rule</th>
+                <th>Source</th>
                 <th>Flow</th>
                 <th className="col-bar">Latest result</th>
                 <th className="col-num">Passing</th>
@@ -242,13 +270,16 @@ export const Evals = () => {
                 >
                   <td>
                     <a className="cell-name cell-link" href={`#/eval/${encodeURIComponent(ev.id)}`}>
-                      {ev.label}
+                      {ev.name}
                     </a>
-                    <div className="cell-preview">{ev.rule}</div>
+                    <div className="cell-preview">{ev.text}</div>
+                  </td>
+                  <td>
+                    <SourceChip anchors={ev.anchors} />
                   </td>
                   <td>
                     <FlowChip flowId={ev.flowId} flowName={flows.find((f) => f.id === ev.flowId)?.name} />
-                    {ev.flowId && ev.autorun ? (
+                    {ev.flowId ? (
                       <div className="cell-preview" title={`Reruns after ${ev.autorunThreshold} new member traces`}>
                         autorun ≥{formatNumber(ev.autorunThreshold)}
                       </div>

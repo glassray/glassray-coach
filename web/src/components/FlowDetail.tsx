@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { FlowAudit, FlowClassify, FlowDetail as FlowDetailData, FlowMember } from "../api";
 import { deleteFlow, fetchFlow, fetchFlowAudit, isNotFoundError, updateFlow } from "../api";
 import { formatNumber, relativeTime, truncate } from "../format";
+import { SourceChip } from "./Evals";
 import type { SelectorFields } from "./Flows";
 import { ClassifyChip, describeSelector, fieldsToSelector, SelectorFieldsGrid, selectorToFields } from "./Flows";
 
@@ -48,6 +49,63 @@ const MemberHead = () => (
     </tr>
   </thead>
 );
+
+/** The most common code-anchor file among a flow's rules (the flow's primary source), or null. */
+const primarySourceFile = (data: FlowDetailData): string | null => {
+  const counts = new Map<string, number>();
+  for (const ev of data.evals) {
+    const file = ev.anchors?.[0]?.file;
+    if (file) counts.set(file, (counts.get(file) ?? 0) + 1);
+  }
+  let best: string | null = null;
+  let bestN = 0;
+  for (const [file, n] of counts) {
+    if (n > bestN) {
+      best = file;
+      bestN = n;
+    }
+  }
+  return best;
+};
+
+/** One fact row in the "Built from" rail. */
+const RailFact = ({ label, children }: { label: string; children: React.ReactNode }) => (
+  <div className="rail-fact">
+    <span className="rail-fact-label">{label}</span>
+    <span className="rail-fact-value">{children}</span>
+  </div>
+);
+
+/**
+ * The "Built from" rail: only the LOCAL-meaningful facts — the flow's Agent
+ * (from its selector) and Source file (the most common among its rules). Model
+ * and Recipe come from the `run` recipe, which is local-only in `glassray.yaml`
+ * and never server state, so they're omitted here rather than invented. No
+ * cloud/monitoring fields (Health, Repo, Inputs, Last-run).
+ */
+const BuiltFromRail = ({ data }: { data: FlowDetailData }) => {
+  const agent = data.selector?.agent ?? null;
+  const source = primarySourceFile(data);
+  return (
+    <aside className="flow-rail panel card-pad">
+      <h2 className="card-title rail-title">Built from</h2>
+      <RailFact label="Agent">
+        {agent ? <span className="tag">{agent}</span> : <span className="muted">not pinned</span>}
+      </RailFact>
+      <RailFact label="Source">
+        {source ? (
+          <span className="mono rail-source">{source}</span>
+        ) : (
+          <span className="muted">custom / not linked</span>
+        )}
+      </RailFact>
+      <p className="muted rail-note">
+        Model and recipe live in this repo's <span className="mono">glassray.yaml</span> <span className="mono">run</span>{" "}
+        block (local-only) — not tracked by Coach.
+      </p>
+    </aside>
+  );
+};
 
 /** Editable definition form state: identity + selector fields + rule + classify mode. */
 interface DefinitionDraft {
@@ -209,6 +267,8 @@ export const FlowDetail = ({ id }: { id: string }) => {
         ← All flows
       </a>
 
+      <div className="flow-grid">
+        <div className="flow-main">
       <header className="detail-head">
         <div className="detail-title-row">
           <h1 className="detail-title">{data.name}</h1>
@@ -252,7 +312,14 @@ export const FlowDetail = ({ id }: { id: string }) => {
               </div>
             )}
             {data.rule ? (
-              <div className="flow-def-line">“{data.rule}”</div>
+              // A discovery flow seeds its LLM rule from its description, so the
+              // quote would just repeat the sub-header — note it instead of
+              // printing the same paragraph twice.
+              data.rule.trim() === data.description.trim() ? (
+                <div className="muted flow-def-line">Members are matched against the description above (LLM rule).</div>
+              ) : (
+                <div className="flow-def-line">“{data.rule}”</div>
+              )
             ) : (
               <div className="muted flow-def-line">No rule — members come from the selector only.</div>
             )}
@@ -340,12 +407,19 @@ export const FlowDetail = ({ id }: { id: string }) => {
         </form>
       )}
 
-      <h2 className="section-title">Evals ({data.evals.length})</h2>
+      {/* The flow's rules, both layers together: the membership rule above
+          (definition card) picks the denominator; these assertion rules score
+          the numerator. Every rule is active — each is file-linked or custom. */}
+      <h2 className="section-title">Rules ({data.evals.length})</h2>
       {data.evals.length === 0 ? (
         <div className="notice">
-          No evals scoped to this flow yet — create one from the{" "}
+          No assertion rules on this flow yet — save a{" "}
+          <a className="inline-link" href="#/deviations">
+            deviation
+          </a>{" "}
+          as a rule, or write one from the{" "}
           <a className="inline-link" href="#/evals">
-            Evals
+            Rules
           </a>{" "}
           view and bind it here.
         </div>
@@ -354,10 +428,13 @@ export const FlowDetail = ({ id }: { id: string }) => {
           {data.evals.map((ev) => (
             <li key={ev.id}>
               <a className="mini-row" href={`#/eval/${encodeURIComponent(ev.id)}`}>
-                <span className="mini-name">{ev.label}</span>
-                <span className={`tag${ev.autorun ? " tag-autorun" : ""}`}>
-                  {ev.autorun ? "autorun on" : "autorun off"}
-                </span>
+                <span className="mini-name">{ev.name}</span>
+                <SourceChip anchors={ev.anchors} compact />
+                {ev.threshold !== null ? (
+                  <span className="tag" title="`glassray check` gate — fails below this pass rate">
+                    gate ≥{Math.round(ev.threshold * 100)}%
+                  </span>
+                ) : null}
                 <span className="mono muted mini-age">{ev.lastRunAt ? relativeTime(ev.lastRunAt) : "never run"}</span>
               </a>
             </li>
@@ -420,6 +497,9 @@ export const FlowDetail = ({ id }: { id: string }) => {
           ) : null}
         </>
       ) : null}
+        </div>
+        <BuiltFromRail data={data} />
+      </div>
     </section>
   );
 };

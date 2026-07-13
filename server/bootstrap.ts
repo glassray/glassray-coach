@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS traces (
   tokens_out integer,
   input_preview text,
   output_preview text,
+  run_label text,
+  model text,
   classified_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS traces_received_at_idx ON traces (received_at DESC);
@@ -96,6 +98,7 @@ CREATE TABLE IF NOT EXISTS flows (
   classify text NOT NULL DEFAULT 'selector',
   status text NOT NULL DEFAULT 'active',
   created_by text NOT NULL DEFAULT 'user',
+  slug text,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
@@ -111,14 +114,18 @@ CREATE TABLE IF NOT EXISTS flow_traces (
 CREATE INDEX IF NOT EXISTS flow_traces_trace_id_idx ON flow_traces (trace_id);
 CREATE TABLE IF NOT EXISTS evals (
   id text PRIMARY KEY,
-  label text NOT NULL,
+  name text NOT NULL,
   description text NOT NULL,
-  rule text NOT NULL,
+  text text NOT NULL,
   source text NOT NULL,
   source_deviation_id text,
   flow_id text,
-  autorun boolean NOT NULL DEFAULT true,
+  anchors jsonb,
+  state text NOT NULL DEFAULT 'active',
   autorun_threshold integer NOT NULL DEFAULT 10,
+  threshold double precision,
+  judge_model text,
+  slug text,
   last_run_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -134,6 +141,21 @@ CREATE TABLE IF NOT EXISTS eval_results (
 );
 CREATE INDEX IF NOT EXISTS eval_results_eval_id_idx ON eval_results (eval_id);
 CREATE INDEX IF NOT EXISTS eval_results_run_id_idx ON eval_results (run_id);
+CREATE TABLE IF NOT EXISTS experiments (
+  id text PRIMARY KEY,
+  flow_id text,
+  question text NOT NULL,
+  status text NOT NULL DEFAULT 'open',
+  verdict text,
+  baseline_label text,
+  candidate_label text,
+  run_id text,
+  report jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  concluded_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS experiments_created_at_idx ON experiments (created_at DESC);
+CREATE INDEX IF NOT EXISTS experiments_flow_id_idx ON experiments (flow_id);
 CREATE TABLE IF NOT EXISTS llm_usage (
   id text PRIMARY KEY,
   at timestamptz NOT NULL DEFAULT now(),
@@ -186,11 +208,67 @@ END $$;
 ALTER TABLE flows ALTER COLUMN run_id DROP NOT NULL;
 ALTER TABLE flows ALTER COLUMN trace_count SET DEFAULT 0;
 ALTER TABLE evals ADD COLUMN IF NOT EXISTS flow_id text;
-ALTER TABLE evals ADD COLUMN IF NOT EXISTS autorun boolean NOT NULL DEFAULT true;
 ALTER TABLE evals ADD COLUMN IF NOT EXISTS autorun_threshold integer NOT NULL DEFAULT 10;
 ALTER TABLE evals ADD COLUMN IF NOT EXISTS last_run_at timestamptz;
 CREATE INDEX IF NOT EXISTS flow_traces_trace_id_idx ON flow_traces (trace_id);
 CREATE INDEX IF NOT EXISTS traces_unclassified_idx ON traces (received_at) WHERE classified_at IS NULL;
+-- ── Rule lifecycle (0.3): the eval \`autorun\` boolean becomes a rule \`state\` ──
+-- One-time backfill for pre-state datadirs: an autorun eval was a watched rule,
+-- a non-autorun one a proposed rule. Fresh datadirs get \`state\` from the CREATE
+-- TABLE above and never had \`autorun\`; the legacy column is left in place.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'state') THEN
+    ALTER TABLE evals ADD COLUMN state text NOT NULL DEFAULT 'watched';
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'autorun') THEN
+      UPDATE evals SET state = CASE WHEN autorun THEN 'watched' ELSE 'proposed' END;
+    END IF;
+  END IF;
+END $$;
+-- Rules-by-source (retire the proposed/watched/archived lifecycle): a rule now
+-- carries WHERE it came from instead of a state. The legacy state column is
+-- left in place (vestigial — never read for gating) to avoid a destructive
+-- migration.
+-- ── Cloud FlowRule vocabulary alignment ──────────────────────────────────────
+-- Rename/reshape the eval columns to match cloud's canonical FlowRule primitive:
+--   label -> name, rule -> text, and the invented source_file (a repo path) ->
+--   the cloud model of source (code|promoted provenance) + anchors (WHERE in
+--   code). Guarded on column existence so each step runs exactly once per
+--   pre-alignment datadir; a fresh datadir (new CREATE TABLE above) no-ops.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'label')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'name') THEN
+    ALTER TABLE evals RENAME COLUMN label TO name;
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'rule')
+     AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'text') THEN
+    ALTER TABLE evals RENAME COLUMN rule TO text;
+  END IF;
+  ALTER TABLE evals ADD COLUMN IF NOT EXISTS anchors jsonb;
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'evals' AND column_name = 'source_file') THEN
+    -- Fold the file path into an anchor (only where not already migrated)…
+    UPDATE evals
+      SET anchors = json_build_array(json_build_object('file', source_file))
+      WHERE source_file IS NOT NULL AND anchors IS NULL;
+    -- …then re-derive provenance: a file-anchored rule is read-from-code, every
+    -- other (deviation|manual) rule was authored → promoted.
+    UPDATE evals SET source = CASE WHEN source_file IS NOT NULL THEN 'code' ELSE 'promoted' END;
+    ALTER TABLE evals DROP COLUMN source_file;
+  ELSE
+    -- No source_file column (0.1 legacy, or already aligned): map only the legacy
+    -- provenance values, never clobbering an already-migrated code|promoted.
+    UPDATE evals SET source = 'promoted' WHERE source IN ('deviation', 'manual');
+  END IF;
+END $$;
+-- Portable-rule-artifact columns (idempotent on their own).
+ALTER TABLE evals ADD COLUMN IF NOT EXISTS threshold double precision;
+ALTER TABLE evals ADD COLUMN IF NOT EXISTS judge_model text;
+ALTER TABLE evals ADD COLUMN IF NOT EXISTS slug text;
+ALTER TABLE flows ADD COLUMN IF NOT EXISTS slug text;
+-- Harness-loop columns: the run-label corpus key + the primary observed model
+-- (pre-existing rows stay null; both repopulate on re-ingest).
+ALTER TABLE traces ADD COLUMN IF NOT EXISTS run_label text;
+ALTER TABLE traces ADD COLUMN IF NOT EXISTS model text;
+CREATE INDEX IF NOT EXISTS traces_run_label_idx ON traces (run_label) WHERE run_label IS NOT NULL;
 `;
 
 /** Reads the local API key from <home>/local-api-key, generating one (glsk_local_ + 48 hex, mode 0600) on first boot. */

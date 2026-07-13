@@ -72,6 +72,78 @@ const keepSpansNotIn = (
 /** Matches a 32-char hex OTLP traceId. */
 const TRACE_ID_RE = /^[0-9a-f]{32}$/i;
 
+/** Attribute keys carrying the SDK `environment` — the run-label corpus key (SDK key first, standard alias second). */
+const RUN_LABEL_ATTR_KEYS = ['glassray.environment', 'deployment.environment.name'] as const;
+
+/** Read the first matching string value out of an OTLP attribute list (`[{ key, value: { stringValue } }]`). */
+const otlpAttrString = (attrs: unknown, keys: readonly string[]): string | null => {
+  if (!Array.isArray(attrs)) return null;
+  for (const key of keys) {
+    for (const entry of attrs) {
+      const e = entry as { key?: unknown; value?: { stringValue?: unknown } } | null;
+      if (e?.key === key && typeof e.value?.stringValue === 'string' && e.value.stringValue.length > 0) {
+        return e.value.stringValue;
+      }
+    }
+  }
+  return null;
+};
+
+/**
+ * Resolve the trace's run label from a (per-trace) envelope, mirroring the
+ * vendor's §4.2 metadata convention: a root span's attribute overrides the
+ * resource-level default, reading `glassray.environment` first and the
+ * standard `deployment.environment.name` as the alias. Null when untagged.
+ */
+export const extractRunLabel = (envelope: { resourceSpans: unknown[] }): string | null => {
+  let resourceValue: string | null = null;
+  for (const rs of envelope.resourceSpans) {
+    const r = rs as { resource?: { attributes?: unknown }; scopeSpans?: unknown } | null;
+    resourceValue ??= otlpAttrString(r?.resource?.attributes, RUN_LABEL_ATTR_KEYS);
+    if (!Array.isArray(r?.scopeSpans)) continue;
+    for (const ss of r.scopeSpans) {
+      const spans = (ss as { spans?: unknown } | null)?.spans;
+      if (!Array.isArray(spans)) continue;
+      for (const span of spans) {
+        const s = span as { parentSpanId?: unknown; attributes?: unknown } | null;
+        const isRoot = typeof s?.parentSpanId !== 'string' || s.parentSpanId.length === 0;
+        if (!isRoot) continue;
+        const rootValue = otlpAttrString(s?.attributes, RUN_LABEL_ATTR_KEYS);
+        if (rootValue !== null) return rootValue;
+      }
+    }
+  }
+  return resourceValue;
+};
+
+/** Loosely-typed span node for the primary-model walk (the vendor view's tree, defensively). */
+type LooseSpanNode = {
+  kind?: unknown;
+  model?: unknown;
+  tokensOut?: unknown;
+  children?: unknown;
+};
+
+/**
+ * The trace's PRIMARY LLM model: among the view's `llm` spans that carry a
+ * model id, the one with the most output tokens wins (the main generation —
+ * ties/absent counts fall back to first-seen). Null when no span names a
+ * model. This is what the "cost if metered" price book keys on.
+ */
+export const primaryLlmModel = (tree: unknown): string | null => {
+  let best: { model: string; tokensOut: number } | null = null;
+  const walk = (node: LooseSpanNode | null | undefined): void => {
+    if (!node || typeof node !== 'object') return;
+    if (node.kind === 'llm' && typeof node.model === 'string' && node.model.length > 0) {
+      const tokensOut = typeof node.tokensOut === 'number' && Number.isFinite(node.tokensOut) ? node.tokensOut : 0;
+      if (best === null || tokensOut > best.tokensOut) best = { model: node.model, tokensOut };
+    }
+    if (Array.isArray(node.children)) for (const child of node.children) walk(child as LooseSpanNode);
+  };
+  walk(tree as LooseSpanNode);
+  return best === null ? null : (best as { model: string }).model;
+};
+
 /** Collects the unique lowercase 32-hex traceIds present in an OTLP envelope (defensive walk). */
 export const collectTraceIds = (envelope: unknown): string[] => {
   const ordered: string[] = [];
@@ -174,6 +246,7 @@ const upsertTraceUnlocked = async (
   id: string,
   envelope: unknown,
   buildTraceView: BuildTraceView,
+  labelOverride?: string,
 ): Promise<void> => {
   const incoming = filterEnvelopeToTrace(envelope, id);
   const existing = await db.select({ raw: traces.raw }).from(traces).where(eq(traces.id, id)).limit(1);
@@ -209,6 +282,10 @@ const upsertTraceUnlocked = async (
     tokensOut: toInt(view.tokensOut),
     inputPreview: view.inputPreview ?? null,
     outputPreview: view.outputPreview ?? null,
+    // The corpus key: an explicit ingest override (cloud-pulled traces tagged
+    // `production`) wins over the envelope's own SDK `environment`.
+    runLabel: labelOverride ?? extractRunLabel(merged),
+    model: primaryLlmModel(view.tree),
   };
   await db
     .insert(traces)
@@ -228,4 +305,5 @@ export const upsertTrace = (
   id: string,
   envelope: unknown,
   buildTraceView: BuildTraceView,
-): Promise<void> => withTraceLock(id, () => upsertTraceUnlocked(db, id, envelope, buildTraceView));
+  labelOverride?: string,
+): Promise<void> => withTraceLock(id, () => upsertTraceUnlocked(db, id, envelope, buildTraceView, labelOverride));

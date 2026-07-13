@@ -117,13 +117,13 @@ describe('glassray M6 evals (mock)', () => {
     expect(id).toMatch(/^eval_/);
 
     const list = (await (await fetch(`${baseUrl}/api/evals`)).json()) as {
-      items: Array<{ id: string; label: string; rule: string; source: string; scored: number }>;
+      items: Array<{ id: string; name: string; text: string; source: string; scored: number }>;
       total: number;
     };
     expect(list.total).toBeGreaterThanOrEqual(1);
     const savedEval = list.items.find((e) => e.id === id)!;
-    expect(savedEval.source).toBe('deviation');
-    expect(savedEval.rule).toBe(deviation.rule);
+    expect(savedEval.source).toBe('promoted');
+    expect(savedEval.text).toBe(deviation.rule);
     expect(savedEval.scored).toBe(0); // not run yet
   });
 
@@ -131,7 +131,7 @@ describe('glassray M6 evals (mock)', () => {
     const created = await fetch(`${baseUrl}/api/evals`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ label: 'Always greets the user', rule: 'The agent must greet the user before answering.' }),
+      body: JSON.stringify({ name: 'Always greets the user', text: 'The agent must greet the user before answering.' }),
     });
     expect(created.status).toBe(201);
     const { id } = (await created.json()) as { id: string };
@@ -168,7 +168,7 @@ describe('glassray M6 evals (mock)', () => {
     const created = await fetch(`${baseUrl}/api/evals`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ label: 'Queue probe', rule: 'noop' }),
+      body: JSON.stringify({ name: 'Queue probe', text: 'noop' }),
     });
     const { id } = (await created.json()) as { id: string };
     const [a, b] = await Promise.all([
@@ -237,10 +237,10 @@ describe('glassray M6 evals (mock)', () => {
     const evalId = 'eval_regression_probe';
     await db.insert(evals).values({
       id: evalId,
-      label: 'Regression probe',
+      name: 'Regression probe',
       description: '',
-      rule: 'The agent must not hallucinate.',
-      source: 'manual',
+      text: 'The agent must not hallucinate.',
+      source: 'promoted',
     });
     const older = new Date('2026-01-01T00:00:00Z');
     const newer = new Date('2026-01-02T00:00:00Z');
@@ -277,7 +277,7 @@ describe('glassray M6 evals (mock)', () => {
     const created = await fetch(`${baseUrl}/api/evals`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ label: 'Doomed', rule: 'noop' }),
+      body: JSON.stringify({ name: 'Doomed', text: 'noop' }),
     });
     const { id } = (await created.json()) as { id: string };
     const del = await fetch(`${baseUrl}/api/evals/${id}`, { method: 'DELETE' });

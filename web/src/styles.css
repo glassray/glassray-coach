@@ -2417,14 +2417,7 @@ a {
   background: var(--accent);
   border-color: var(--muted-foreground);
 }
-/* Autorun-enabled marker on a flow's attached-evals list. */
-.tag-autorun {
-  color: var(--brand);
-  border-color: color-mix(in srgb, var(--brand) 40%, var(--border));
-  background: color-mix(in srgb, var(--brand) 8%, var(--card));
-}
-
-/* Eval detail: flow-scope + autorun editor row. */
+/* Rule detail: flow-scope + state/gate editor row. */
 .eval-scope {
   margin-top: 1rem;
 }
@@ -2437,14 +2430,238 @@ a {
 .eval-scope-row .new-eval-field {
   min-width: 14rem;
 }
-.eval-autorun-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding-bottom: 0.55rem;
-  font-size: 0.85rem;
-  cursor: pointer;
-}
 .eval-threshold {
   width: 9rem;
+}
+
+/* ---------- Rule source chips (file-linked | custom) ---------- */
+
+.source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid var(--border);
+  background: var(--muted);
+  color: var(--muted-foreground);
+}
+/* The linked file path, in brand green so the provenance reads at a glance. */
+.source-chip-file {
+  font-family:
+    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  color: var(--brand);
+}
+/* A hand-written rule tied to no file. */
+.source-chip-custom {
+  font-style: italic;
+}
+
+/* ---------- Compare view ---------- */
+
+.compare-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 1rem;
+}
+.compare-form-row .new-eval-field {
+  min-width: 16rem;
+}
+.compare-kind {
+  max-width: 7rem;
+}
+.delta-chip {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.delta-up {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 10%, var(--card));
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+}
+.delta-down {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 10%, var(--card));
+  border-color: color-mix(in srgb, var(--destructive) 35%, transparent);
+}
+.delta-flat {
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-color: var(--border);
+}
+
+/* Experiments — the compare-run cards on #/experiments */
+.exp-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.exp-card {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 0.85rem 1rem;
+  transition: background 0.12s ease;
+}
+.exp-card:hover {
+  background: var(--muted);
+}
+.exp-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.exp-card-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 500;
+  font-size: 0.95rem;
+}
+.exp-card-when {
+  margin-left: auto;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+.exp-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.exp-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.76rem;
+}
+.exp-chip-name {
+  color: var(--muted-foreground);
+}
+
+/* Experiment card: the flow/cost meta row + a verdict accent stripe on the left. */
+.exp-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+}
+.exp-card-go {
+  border-left: 3px solid var(--success);
+}
+.exp-card-nogo {
+  border-left: 3px solid var(--destructive);
+}
+.exp-card-undecided,
+.exp-card-open {
+  border-left: 3px solid var(--border);
+}
+
+/* Verdict badge (go | no-go | undecided | open/running). */
+.verdict-badge {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 999px;
+  white-space: nowrap;
+  border: 1px solid transparent;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.verdict-badge-go {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--success) 35%, transparent);
+}
+.verdict-badge-nogo {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 12%, var(--card));
+  border-color: color-mix(in srgb, var(--destructive) 38%, transparent);
+}
+.verdict-badge-undecided,
+.verdict-badge-open {
+  color: var(--muted-foreground);
+  background: var(--muted);
+  border-color: var(--border);
+}
+
+/* Experiment detail: the meta row under the question header. */
+.exp-detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-top: 0.4rem;
+}
+
+/* ---------- Flow page: two-column layout + "Built from" rail ---------- */
+
+.flow-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 17rem;
+  gap: 1.5rem;
+  align-items: start;
+}
+.flow-main {
+  min-width: 0;
+}
+/* The rail sticks alongside the (taller) main column on wide screens. */
+.flow-rail {
+  position: sticky;
+  top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.rail-title {
+  margin: 0;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted-foreground);
+}
+.rail-fact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.rail-fact-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted-foreground);
+}
+.rail-fact-value {
+  font-size: 0.9rem;
+}
+.rail-source {
+  color: var(--brand);
+  word-break: break-all;
+}
+.rail-note {
+  font-size: 0.74rem;
+  line-height: 1.4;
+  margin: 0;
+}
+/* Narrow screens: the rail drops below the content. */
+@media (max-width: 860px) {
+  .flow-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .flow-rail {
+    position: static;
+  }
 }

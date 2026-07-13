@@ -1,4 +1,10 @@
-import { boolean, doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
+import { doublePrecision, integer, jsonb, pgTable, primaryKey, text, timestamp } from 'drizzle-orm/pg-core';
+
+/**
+ * WHERE in the agent's code a rule is enforced — mirrors cloud `FlowRule.anchors`.
+ * Coach only populates `file`; `symbol`/`line` are carried for artifact fidelity.
+ */
+export type Anchor = { file: string; symbol?: string; line?: number };
 
 /** One row per trace, keyed by the 32-hex OTLP traceId; `raw` holds the full envelope, the rest are denormalized display fields. */
 export const traces = pgTable('traces', {
@@ -20,6 +26,10 @@ export const traces = pgTable('traces', {
   tokensOut: integer('tokens_out'),
   inputPreview: text('input_preview'),
   outputPreview: text('output_preview'),
+  /** The run label this trace belongs to — the SDK `environment` (`glassray.environment`), or the ingest `?label=` override. Corpus key for run/compare. */
+  runLabel: text('run_label'),
+  /** Primary LLM model observed in the trace's spans (most output tokens wins) — feeds the "cost if metered" price book. */
+  model: text('model'),
   /** Classification watermark: null = awaiting the background classify sweep; stamped once swept (matched or not). */
   classifiedAt: timestamp('classified_at', { withTimezone: true, mode: 'date' }),
 });
@@ -104,6 +114,8 @@ export const flows = pgTable('flows', {
   status: text('status').notNull().default('active'),
   /** Provenance: `user` (dashboard), `claude` (CLI agent), or `discovery` (clustering bootstrap). */
   createdBy: text('created_by').notNull().default('user'),
+  /** Stable artifact identity (the `glassray.yaml` flow id); null until exported/imported. */
+  slug: text('slug'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 });
@@ -123,24 +135,42 @@ export const flowTraces = pgTable(
   (t) => [primaryKey({ columns: [t.flowId, t.traceId] })],
 );
 
-/** A repeatable pass/fail check built from a plain-language `rule` (saved from a deviation, or hand-written). */
+/**
+ * An assertion RULE over a flow's traces — a repeatable pass/fail check built
+ * from a plain-language `text` predicate (saved from a deviation, or
+ * hand-written). Historically "evals"; the table name stays for datadir
+ * compatibility. Every rule is active — it gates `check` and runs in `compare`.
+ * Field names/meanings mirror cloud's canonical `FlowRule` primitive: `name`
+ * (title), `text` (the judged predicate), `source` (`code` = read from a file
+ * anchor, `promoted` = authored), and `anchors` (WHERE in code it's enforced).
+ * Acceptance is git review of `glassray.yaml`, not an in-app promote.
+ */
 export const evals = pgTable('evals', {
   /** Prefixed random-hex id (`eval_…`). */
   id: text('id').primaryKey(),
-  label: text('label').notNull(),
+  /** Short plain-language TITLE of the rule (cloud `FlowRule.name`). */
+  name: text('name').notNull(),
   description: text('description').notNull(),
-  /** The plain-language rule each trace is scored against (pass = complies, fail = violates). */
-  rule: text('rule').notNull(),
-  /** Provenance: `deviation` (saved from a discovered type) or `manual` (hand-written). */
+  /** The plain-language rule each trace is scored against (pass = complies, fail = violates) — cloud `FlowRule.text`. */
+  text: text('text').notNull(),
+  /** Provenance (cloud `FlowRule.source`): `code` (read from a file anchor) or `promoted` (authored). */
   source: text('source').notNull(),
-  /** The deviation this eval was saved from, when `source = 'deviation'`. */
+  /** The deviation this eval was promoted from, when it began as a discovered type. */
   sourceDeviationId: text('source_deviation_id'),
   /** The flow this eval is scoped to (runs sample that flow's members); null = global (newest traces store-wide). */
   flowId: text('flow_id'),
-  /** Whether the server auto-reruns this eval when its flow accrues new member traces. */
-  autorun: boolean('autorun').notNull().default(true),
-  /** How many new member traces (since the last run) trigger an automatic rerun. */
+  /** WHERE in code the rule is enforced (cloud `FlowRule.anchors`); Coach populates only `file`. Null = authored/custom. */
+  anchors: jsonb('anchors').$type<Anchor[]>(),
+  /** VESTIGIAL: the retired lifecycle column, kept to avoid a destructive migration. Set to a constant on insert; never read for gating. */
+  state: text('state').notNull().default('active'),
+  /** How many new member traces (since the last run) trigger an automatic rerun of a watched rule. */
   autorunThreshold: integer('autorun_threshold').notNull().default(10),
+  /** Pass-rate gate for `glassray check` (0..1); null = 1.0 (any failure breaches). */
+  threshold: doublePrecision('threshold'),
+  /** Preferred judge model id for runs of this rule; null = the light-tier default. */
+  judgeModel: text('judge_model'),
+  /** Stable artifact identity (the `glassray.yaml` rule id); null until exported/imported. */
+  slug: text('slug'),
   /** When this eval's most recent run STARTED (stamped at run start — the autorun watermark). */
   lastRunAt: timestamp('last_run_at', { withTimezone: true, mode: 'date' }),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -159,6 +189,36 @@ export const llmUsage = pgTable('llm_usage', {
   tokensOut: integer('tokens_out').notNull(),
   /** Estimated USD cost — 0 for the free `mock` / `claude-subscription` paths. */
   costUsd: doublePrecision('cost_usd').notNull(),
+});
+
+/**
+ * A durable EXPERIMENT: one question ("can we switch to Haiku?") with a
+ * baseline vs candidate comparison and a generated report + verdict. `compare`
+ * is the mechanism inside it; the report is what you keep. Experiments are
+ * records — never part of `glassray.yaml`.
+ */
+export const experiments = pgTable('experiments', {
+  /** Prefixed random-hex id (`exp_…`). */
+  id: text('id').primaryKey(),
+  /** The flow whose rules form the suite; null = global rules. */
+  flowId: text('flow_id'),
+  /** The plain-language question the experiment answers. */
+  question: text('question').notNull(),
+  /** Lifecycle: `open` (created) → `running` (report generating) → `concluded`. */
+  status: text('status').notNull().default('open'),
+  /** Suggested outcome once concluded: `go` | `no-go` | `undecided`; null until then. */
+  verdict: text('verdict'),
+  /** The run label of the baseline corpus; null until a report runs. */
+  baselineLabel: text('baseline_label'),
+  /** The run label of the candidate corpus; null until a report runs. */
+  candidateLabel: text('candidate_label'),
+  /** The compare run this experiment wrapped; null until a report runs. */
+  runId: text('run_id'),
+  /** The generated report (compare result + prose summary + failing examples); null until concluded. */
+  report: jsonb('report'),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  /** When the experiment was concluded (report generated); null while open/running. */
+  concludedAt: timestamp('concluded_at', { withTimezone: true, mode: 'date' }),
 });
 
 /** One per-trace verdict produced by scoring an eval's rule during a run. */

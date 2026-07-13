@@ -118,8 +118,8 @@ describe('classification pipeline (mock, hermetic)', () => {
 
     // A flow-scoped eval samples ONLY the flow's members.
     const evalId = await createManualEval(rt.db, {
-      label: 'Greets warmly',
-      rule: 'The agent should greet the user warmly.',
+      name: 'Greets warmly',
+      text: 'The agent should greet the user warmly.',
       flowId: created.id,
     });
     const result = await runEval(rt.db, { evalId, runId: await createRun(rt.db, 'eval') });
@@ -136,8 +136,8 @@ describe('classification pipeline (mock, hermetic)', () => {
       selector: { agent: 'billing-bot' },
     });
     const evalId = await createManualEval(rt.db, {
-      label: 'No refunds promised',
-      rule: 'The agent must not promise a refund.',
+      name: 'No refunds promised',
+      text: 'The agent must not promise a refund.',
       flowId: flow.id,
       autorunThreshold: 2,
     });
