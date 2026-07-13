@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * glassray CLI — zero-dependency plain ESM.
- * Bare `glassray` (and `help` / `--help`) prints the branded landing screen.
+ * Bare `glassray-coach` (and `help` / `--help`) prints the branded landing screen.
  * Server commands: start | init | reset | status | doctor.
  * Data commands (bin/commands.mjs): traces | stats | usage | flows | evals |
  * deviations | discovery | fix | runs — pure JSON on stdout, for coding agents.
@@ -108,7 +108,7 @@ const printConnectBlock = (info, port, updateNotice = null) => {
   console.log(`    export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${info.apiKey}"`);
   console.log('');
   console.log(
-    `  Next: ${paint('glassray init', PALETTE.brand)} in your agent's repo · quickstart ${link(GUIDES.quickstart)}`,
+    `  Next: ${paint('glassray-coach init', PALETTE.brand)} in your agent's repo · quickstart ${link(GUIDES.quickstart)}`,
   );
   if (updateNotice) {
     console.log('');
@@ -165,14 +165,14 @@ const cmdStart = async ({ port, dataDir, noOpen }) => {
 /** mcp: removed in 0.2 — the CLI (plus the installable skill) is the one agent-facing surface now. */
 const cmdMcp = () => {
   errorLine(
-    'glassray mcp was removed in 0.2 — Coach is now driven through the CLI. ' +
-      'Run `glassray init` to install the Claude Code skill, then use the resource commands ' +
-      '(see `glassray --help`). If you had it registered: `claude mcp remove glassray`.',
+    'glassray-coach mcp was removed in 0.2 — Coach is now driven through the CLI. ' +
+      'Run `glassray-coach init` to install the Claude Code skill, then use the resource commands ' +
+      '(see `glassray-coach --help`). If you had it registered: `claude mcp remove glassray`.',
   );
   process.exit(1);
 };
 
-/** Source of the bundled agent skill that `glassray init` installs. */
+/** Source of the bundled agent skill that `glassray-coach init` installs. */
 const SKILL_SOURCE = path.join(COACH_ROOT, 'skills', 'glassray', 'SKILL.md');
 
 /**
@@ -260,7 +260,7 @@ const cmdStatus = async ({ port, dataDir }) => {
     console.log(`  ${bullet('ok')} server running on ${link(`http://127.0.0.1:${port}/`)} ${dim(`(v${info.version})`)}`);
   } else {
     console.log(`  ${bullet('down')} server not running on port ${port}`);
-    console.log(`    Start one:   ${paint('glassray start', PALETTE.brand)}`);
+    console.log(`    Start one:   ${paint('glassray-coach start', PALETTE.brand)}`);
   }
   console.log(`    Data dir    ${home}${homeExists ? '' : dim(' (missing)')}`);
   console.log(`    Key file    ${keyFile}${existsSync(keyFile) ? '' : dim(' (missing)')}`);
@@ -427,7 +427,7 @@ if (command === undefined || command === 'help') {
     process.exit(0);
   }
   if (topic !== undefined && !MANAGEMENT_COMMANDS.includes(topic)) {
-    errorLine(`unknown command "${topic}" — run \`glassray --help\``);
+    errorLine(`unknown command "${topic}" — run \`glassray-coach --help\``);
     process.exit(1);
   }
   await landing();
@@ -476,7 +476,7 @@ if (command === undefined || command === 'help') {
       allowPositionals: true,
     });
   } catch (err) {
-    errorLine(`${err instanceof Error ? err.message : String(err)} — run \`glassray --help\``);
+    errorLine(`${err instanceof Error ? err.message : String(err)} — run \`glassray-coach --help\``);
     process.exit(1);
   }
   const { values, positionals } = parsed;
@@ -507,7 +507,7 @@ if (command === undefined || command === 'help') {
       await cmdDoctor(ctx);
       break;
     default:
-      errorLine(`unknown command "${positionals[0]}" — run \`glassray --help\``);
+      errorLine(`unknown command "${positionals[0]}" — run \`glassray-coach --help\``);
       process.exit(1);
   }
 }

@@ -94,7 +94,7 @@ describe('the shipped skill follows the Agent Skills spec (agentskills.io)', () 
   });
 });
 
-describe('glassray init installs the skill to both standard locations', () => {
+describe('glassray-coach init installs the skill to both standard locations', () => {
   it('writes .agents/skills and .claude/skills, is idempotent, and refuses to clobber edits without --force', () => {
     const cwd = mkdtempSync(path.join(tmpdir(), 'glassray-init-'));
     const run = (args) =>
@@ -176,7 +176,7 @@ describe('landing screen', () => {
     const res = runCli([]);
     expect(res.status).toBe(0);
     expect(res.stdout).toContain('glassray coach');
-    expect(res.stdout).toContain('glassray start');
+    expect(res.stdout).toContain('glassray-coach start');
     // Piped without FORCE_COLOR: plain mode — no ANSI escapes at all.
     expect(res.stdout).not.toMatch(/\x1b\[/);
   });

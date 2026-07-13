@@ -16,8 +16,8 @@ Requires **Node 20.6+**. Run it once, or install permanently:
 ```sh
 npx @glassray/coach start     # no install
 
-npm i -g @glassray/coach      # …or permanent: `glassray` on your PATH
-glassray start                # (upgrade later when the CLI shows its ▲ notice)
+npm i -g @glassray/coach      # …or permanent: `glassray-coach` on your PATH
+glassray-coach start                # (upgrade later when the CLI shows its ▲ notice)
 ```
 
 Either boots the server on `http://127.0.0.1:5899/`, opens the dashboard, and prints your local API key plus a
@@ -33,18 +33,18 @@ To instrument a real agent, point the [`@glassray/tracing`](https://github.com/g
 SDK (`GLASSRAY_ENDPOINT`) or any OTLP/HTTP exporter at Coach — the dashboard's empty state has copy-paste
 recipes. No agent handy? [`examples/support-bot/`](https://github.com/glassray/glassray-coach/tree/main/examples/support-bot) is a full demo with planted failure
 modes and a walkthrough; `node examples/send-otlp.mjs` sends a single sample trace. Something not working?
-`glassray doctor`.
+`glassray-coach doctor`.
 
 ## What you get
 
 - **Live viewer + replay** — traces stream in as your agent runs; open the span waterfall, edit any LLM call, re-issue it.
 - **Discovery** — an LLM judge clusters where runs went wrong into recurring **deviation types**, each with a plain-language rule.
 - **Durable flows** — name your agent's behaviours once (a selector and/or a plain-language rule); Coach classifies new traffic into them in the background.
-- **Assertion rules with a lifecycle** — freeze any deviation or hand-written rule into a repeatable pass/fail check; `proposed` rules observe, **`watched` rules rerun on their own** as fresh traffic lands and gate `glassray check`, flagging regressions.
-- **The portable rule artifact** — `glassray pull` serializes your flows + rules into a versioned `glassray.yaml` (plus frozen golden traces with `--as-fixtures`); `glassray push` reconciles it back terraform-style; `glassray check --fixtures` is the deterministic CI gate.
-- **The harness loop** — your coding agent authors the flow + rules + a `run` recipe in `glassray.yaml`; `glassray run <flow> --label baseline`, make the change, `run --label candidate`, then `glassray compare <flow> baseline candidate` proves behaviour held — per-rule pass-rate deltas plus an honest price-book **"cost if metered"** per side (never `$0/$0` on the free provider). With a linked cloud project, `glassray pull --traces` makes real production traces the baseline and pins their inputs for the candidate run.
+- **Assertion rules with a lifecycle** — freeze any deviation or hand-written rule into a repeatable pass/fail check; `proposed` rules observe, **`watched` rules rerun on their own** as fresh traffic lands and gate `glassray-coach check`, flagging regressions.
+- **The portable rule artifact** — `glassray-coach pull` serializes your flows + rules into a versioned `glassray.yaml` (plus frozen golden traces with `--as-fixtures`); `glassray-coach push` reconciles it back terraform-style; `glassray-coach check --fixtures` is the deterministic CI gate.
+- **The harness loop** — your coding agent authors the flow + rules + a `run` recipe in `glassray.yaml`; `glassray-coach run <flow> --label baseline`, make the change, `run --label candidate`, then `glassray-coach compare <flow> baseline candidate` proves behaviour held — per-rule pass-rate deltas plus an honest price-book **"cost if metered"** per side (never `$0/$0` on the free provider). With a linked cloud project, `glassray-coach pull --traces` makes real production traces the baseline and pins their inputs for the candidate run.
 - **Fix generation** — one paste-into-your-coding-agent instruction doc per deviation: search plan, likely files, ordered edits, acceptance criteria.
-- **Agent-first CLI + skill** — every data command prints the API's JSON verbatim; `glassray init` teaches your coding agent the whole loop.
+- **Agent-first CLI + skill** — every data command prints the API's JSON verbatim; `glassray-coach init` teaches your coding agent the whole loop.
 - **Runs on your model** — your local `~/.claude` subscription (zero-config), a metered API key, or an offline deterministic `mock`; every metered call is budget-capped (`GLASSRAY_LLM_BUDGET_USD`, default $50).
 
 The loop: **see** traces land → **find** recurring failures → **scope** them as flows + evals → **fix** with your
@@ -54,7 +54,7 @@ coding agent → **verify** hands-free as the evals rerun.
 
 ```sh
 glassray                 # branded landing screen: server status, every command, guide links
-glassray <command> --help
+glassray-coach <command> --help
 ```
 
 `start` / `init` / `status` / `doctor` / `reset` manage the server. The data commands — `traces`, `flows`,
@@ -66,17 +66,17 @@ their run to completion (`--no-wait` / `--timeout`). Full reference:
 
 ## Use it from your coding agent
 
-`glassray init` installs an **agent skill** (open [Agent Skills](https://agentskills.io) format) into
+`glassray-coach init` installs an **agent skill** (open [Agent Skills](https://agentskills.io) format) into
 `./.agents/skills/` (Codex, VS Code, Copilot) and `./.claude/skills/` (Claude Code):
 
 ```sh
-cd your-agent-repo && glassray init    # or: npx skills add glassray/glassray-coach
+cd your-agent-repo && glassray-coach init    # or: npx skills add glassray/glassray-coach
 ```
 
-Then ask your agent _"set up glassray flows and evals for this agent"_ — it inventories the durable state,
+Then ask your agent _"set up glassray-coach flows and evals for this agent"_ — it inventories the durable state,
 derives evals from the rules already in your prompts, and runs discover → fix → verify against the local Coach.
 
-> **Migrating from 0.1:** the MCP server is removed — the CLI replaced it. `claude mcp remove glassray`, then `glassray init`.
+> **Migrating from 0.1:** the MCP server is removed — the CLI replaced it. `claude mcp remove glassray`, then `glassray-coach init`.
 
 ## The LLM provider
 
