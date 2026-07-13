@@ -127,7 +127,13 @@ const runToDone = async (path) => {
 };
 
 await runToDone("/api/discovery/run");
+// Flow discovery now reads CODE (not traces); with no `codeRoot` and the offline
+// mock LLM it reads nothing and mints nothing, which is correct — the point here
+// is that the run still completes without any egress. Exercise the flows
+// subsystem itself by creating one flow directly (the deterministic offline path).
 await runToDone("/api/flows/run");
+const created = await api("POST", "/api/flows", { name: "Proof flow", selector: { status: "ok" } });
+if (created.status !== 201) fail(`flow create returned ${created.status}`);
 const devs = await api("GET", "/api/deviations");
 const flows = await api("GET", "/api/flows");
 if (!(devs.json?.total >= 1)) fail("no deviations produced");
