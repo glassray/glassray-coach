@@ -23,9 +23,11 @@ glassray-coach start          # (upgrade later when the CLI shows its ▲ notice
 Either boots the server on `http://127.0.0.1:5899/`, opens the dashboard, and — on a fresh store — prints a
 **paste-into-your-coding-agent prompt** with your live ingest endpoint and local API key baked in. Paste it
 into Claude Code / Codex / Copilot in your agent's repo and it does the whole setup: installs the skill,
-discovers your flows and rules from the code, wires tracing, and verifies the first trace lands. Then you just
-run your agent. (The dashboard's empty state carries the same prompt behind a **Copy prompt** button, and flips
-to "Ready — run your agent" once flows are configured.)
+discovers your flows and rules from the code (the code discovery needs an analysis model — zero-config with
+Claude Code installed, see [the LLM provider](#the-llm-provider); on `mock` the agent derives them by hand
+instead), wires tracing, and verifies the first trace lands. Then you just run your agent. (The dashboard's
+empty state carries the same prompt behind a **Copy prompt** button, and flips to "Ready — run your agent"
+once flows are configured.)
 
 Prefer to instrument by hand? Point the [`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js)
 SDK (`GLASSRAY_ENDPOINT`) or any OTLP/HTTP exporter at Coach:
