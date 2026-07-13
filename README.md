@@ -20,8 +20,15 @@ npm i -g @glassray/coach      # …or permanent: `glassray-coach` on your PATH
 glassray-coach start          # (upgrade later when the CLI shows its ▲ notice)
 ```
 
-Either boots the server on `http://127.0.0.1:5899/`, opens the dashboard, and prints your local API key plus a
-copy-paste OTLP exporter block:
+Either boots the server on `http://127.0.0.1:5899/`, opens the dashboard, and — on a fresh store — prints a
+**paste-into-your-coding-agent prompt** with your live ingest endpoint and local API key baked in. Paste it
+into Claude Code / Codex / Copilot in your agent's repo and it does the whole setup: installs the skill,
+discovers your flows and rules from the code, wires tracing, and verifies the first trace lands. Then you just
+run your agent. (The dashboard's empty state carries the same prompt behind a **Copy prompt** button, and flips
+to "Ready — run your agent" once flows are configured.)
+
+Prefer to instrument by hand? Point the [`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js)
+SDK (`GLASSRAY_ENDPOINT`) or any OTLP/HTTP exporter at Coach:
 
 ```sh
 export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:5899"
@@ -29,9 +36,7 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="http/json"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer glsk_local_..."
 ```
 
-To instrument a real agent, point the [`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js)
-SDK (`GLASSRAY_ENDPOINT`) or any OTLP/HTTP exporter at Coach — the dashboard's empty state has copy-paste
-recipes. No agent handy? [`examples/support-bot/`](https://github.com/glassray/glassray-coach/tree/main/examples/support-bot) is a full demo with planted failure
+No agent handy? [`examples/support-bot/`](https://github.com/glassray/glassray-coach/tree/main/examples/support-bot) is a full demo with planted failure
 modes and a walkthrough; `node examples/send-otlp.mjs` sends a single sample trace. Something not working?
 `glassray-coach doctor`.
 
@@ -43,7 +48,7 @@ modes and a walkthrough; `node examples/send-otlp.mjs` sends a single sample tra
 - **Deviation discovery** — an LLM judge clusters where runs went wrong into recurring **deviation types**, each with a plain-language rule.
 - **Rules anchored to your code** — freeze any deviation or hand-written expectation into a repeatable pass/fail check. Every rule is active: it **reruns on its own** as fresh traffic lands, gates `glassray-coach check`, and carries its provenance — `code` (with `{ file, symbol, line }` anchors into your repo) or `promoted` (hand-written / saved from a deviation). Approval is git review of `glassray.yaml`, not an in-app toggle.
 - **The portable rule artifact** — `glassray-coach pull` serializes your flows + rules into a versioned `glassray.yaml` (plus frozen golden traces with `--as-fixtures`); `glassray-coach push` reconciles it back terraform-style; `glassray-coach check --fixtures` is the deterministic CI gate.
-- **The harness loop** — your coding agent authors the flow + rules + a `run` recipe in `glassray.yaml`; `glassray-coach run <flow> --label baseline`, make the change, `run --label candidate`, then `glassray-coach compare <flow> baseline candidate` proves behaviour held — per-rule pass-rate deltas plus an honest price-book **"cost if metered"** per side (never `$0/$0` on the free provider). With a linked cloud project, `glassray-coach pull --traces` makes real production traces the baseline and pins their inputs for the candidate run.
+- **The harness loop** — Coach discovers the flows + rules from your code (or your agent creates them against the server); your coding agent adds the `run` recipe to `glassray.yaml`. Then `glassray-coach run <flow> --label baseline`, make the change, `run --label candidate`, and `glassray-coach compare <flow> baseline candidate` proves behaviour held — per-rule pass-rate deltas plus an honest price-book **"cost if metered"** per side (never `$0/$0` on the free provider). With a linked cloud project, `glassray-coach pull --traces` makes real production traces the baseline and pins their inputs for the candidate run.
 - **Experiments** — one durable record per question ("can we switch to Haiku?"): an experiment wraps the baseline/candidate compare and generates a report — which rules held or regressed, per-rule pass-rate deltas, and the cost delta. Data, not a verdict; you make the call.
 - **Fix generation** — one paste-into-your-coding-agent instruction doc per deviation: search plan, likely files, ordered edits, acceptance criteria.
 - **Agent-first CLI + skill** — every data command prints the API's JSON verbatim; `glassray-coach init` teaches your coding agent the whole loop.
@@ -68,15 +73,22 @@ their run to completion (`--no-wait` / `--timeout`). Full reference:
 
 ## Use it from your coding agent
 
-`glassray-coach init` installs an **agent skill** (open [Agent Skills](https://agentskills.io) format) into
-`./.agents/skills/` (Codex, VS Code, Copilot) and `./.claude/skills/` (Claude Code):
+The fastest path needs no typing at all: on an empty store, `glassray-coach start` (and the dashboard's empty
+state) hands you a **copy-paste onboarding prompt** with the live endpoint and key baked in. Your agent then
+verifies the server, runs the code discovery, wires tracing, confirms a trace lands end-to-end, snapshots the
+result with `glassray-coach pull`, and reports its coverage — behaviours found vs instrumented vs skipped.
+
+Under the hood, `glassray-coach init` installs an **agent skill** (open [Agent Skills](https://agentskills.io)
+format) into `./.agents/skills/` (Codex, VS Code, Copilot) and `./.claude/skills/` (Claude Code):
 
 ```sh
 cd your-agent-repo && glassray-coach init    # or: npx skills add glassray/glassray-coach
 ```
 
-Then ask your agent _"set up glassray-coach flows and evals for this agent"_ — it inventories the durable state,
-derives evals from the rules already in your prompts, and runs discover → fix → verify against the local Coach.
+The skill teaches the whole loop server-first — flows and rules live in the server (what the dashboard shows);
+`glassray.yaml` is the committed snapshot (`pull` to write it, `push` to apply hand-edits or restore a fresh
+server). You can also just ask your agent things like _"why is my agent failing?"_ or _"prove the model swap
+held"_ — it drives discover → fix → verify and run → compare against the local Coach.
 
 > **Migrating from 0.1:** the MCP server is removed — the CLI replaced it. `claude mcp remove glassray`, then `glassray-coach init`.
 
