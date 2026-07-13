@@ -1534,6 +1534,22 @@ a {
   scrollbar-width: thin;
 }
 
+/* Inline link-styled button (the "show the setup instructions" toggle). */
+.empty-link {
+  padding: 0;
+  font: inherit;
+  color: var(--brand);
+  background: none;
+  border: none;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* The collapsed setup panels, once revealed from the ready state. */
+.empty-setup-reveal {
+  margin-top: 18px;
+}
+
 /* The quiet "or instrument by hand" seam between the two on-ramps. */
 .empty-divider {
   display: flex;
