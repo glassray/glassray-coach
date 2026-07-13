@@ -21,7 +21,7 @@ export interface AgentPromptInput {
  * soft-wrap to their own width, so hard breaks only fight the container.
  */
 export const buildAgentPrompt = ({ ingestEndpoint, apiKey }: AgentPromptInput): string =>
-  `Set up Glassray Coach tracing for the AI agent in this repo. A Coach server (the local AI-agent trace debugger) is already running:
+  `Set up Glassray Coach tracing for the AI agent in this repo. A Coach server (the local AI-agent trace debugger) was running when this prompt was generated:
 
   Ingest endpoint  ${ingestEndpoint}
   API key          ${apiKey}
@@ -29,12 +29,13 @@ export const buildAgentPrompt = ({ ingestEndpoint, apiKey }: AgentPromptInput): 
 Do the following, in order:
 
 1. Run \`npx @glassray/coach init\` here to install the glassray skill, then follow it for every Coach interaction.
-2. Read the codebase to find the agent: entry points, LLM calls, tool calls, and the distinct behaviours (flows) it implements.
-3. Wire tracing to the endpoint above:
+2. Verify the server: run \`npx @glassray/coach status\`. If no server answers, STOP and ask me to run \`npx @glassray/coach start\` — never work against a dead server (the header above may be stale).
+3. Let Coach map the flows from the code: add \`codeRoot: <agent package path>\` to \`glassray.yaml\`, run \`npx @glassray/coach flows discover --code-root <path>\`, and review what it created (\`flows list\`, \`evals list\`) — Coach reads the source and writes flows + code-anchored rules directly into the server. Tighten selectors to the exact runtime names your traces will carry; add anything it missed via \`flows create\` / \`evals create\`.
+4. Wire tracing to the endpoint above:
    - Node/TypeScript: add the \`@glassray/tracing\` package; construct one \`new Glassray({ endpoint, apiKey })\` at startup (endpoint + key from env vars — put them in a gitignored env file, never in code), and wrap each agent run with \`glassray.trace(...)\`, capturing steps with \`t.llm(...)\` / \`t.tool(...)\`.
    - Anything else: point an OTLP exporter at the endpoint with protocol \`http/json\` and header \`Authorization=Bearer <key>\`.
    Tag every trace with agent, environment, customer, and flow.
-4. Create one flow per behaviour you found, and derive assertion rules from the agent's own system prompts, guardrails, and tool descriptions (the skill covers both).
-5. Ask me to run the agent to generate real traffic, verify with \`npx @glassray/coach traces list\` that traces land with the right tags, and fix the wiring if they don't.
+5. Verify ONE trace end-to-end before finishing: instrument the primary flow first, ask me to run the agent once, and confirm with \`npx @glassray/coach traces list\` that it landed with the right tags and classified into its flow. Fix the wiring if it didn't. Only then instrument the remaining flows.
+6. Snapshot server state to git with \`npx @glassray/coach pull\` and commit \`glassray.yaml\`.
 
-When you are done I should only have to run my agent — traces, flows, and rules should all appear in Coach on their own.`;
+Done means, verifiably: \`flows list\` matches the behaviours you found in the code, \`evals list\` holds the rules the code states (if its prompts genuinely state none, say so — an empty rule list is only valid reported, never silent), and \`traces list\` shows a correctly tagged trace. Finish with a coverage report: behaviours found vs instrumented vs skipped (and why) — partial coverage is fine, silent partial coverage is not. From then on I should only have to run my agent.`;
