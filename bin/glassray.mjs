@@ -4,7 +4,8 @@
  * Bare `glassray-coach` (and `help` / `--help`) prints the branded landing screen.
  * Server commands: start | init | reset | status | doctor.
  * Data commands (bin/commands.mjs): traces | stats | usage | flows | evals |
- * deviations | discovery | fix | runs — pure JSON on stdout, for coding agents.
+ * deviations | discovery | experiments | fix | runs — pure JSON on stdout, for
+ * coding agents.
  */
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -337,6 +338,7 @@ const RESOURCE_COMMANDS = new Set([
   'evals',
   'deviations',
   'discovery',
+  'experiments',
   'fix',
   'runs',
   'pull',
@@ -448,6 +450,7 @@ if (command === undefined || command === 'help') {
     evals: commands.cmdEvals,
     deviations: commands.cmdDeviations,
     discovery: commands.cmdDiscovery,
+    experiments: commands.cmdExperiments,
     fix: commands.cmdFix,
     runs: commands.cmdRuns,
     pull: commands.cmdPull,
