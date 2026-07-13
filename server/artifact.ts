@@ -26,9 +26,23 @@ const slugSchema = z
   .max(100)
   .regex(/^[a-z0-9][a-z0-9-]*$/, 'slugs are lowercase kebab-case (a-z, 0-9, -)');
 
+/**
+ * The retired `proposed | watched | archived` rule/flow lifecycle. Declared ONLY
+ * so an artifact carrying a legacy `state:` key fails loudly with a migration
+ * message — rather than the key being silently stripped and the entry imported
+ * as an active, gating rule (which `check` / `compare` would then run). Every
+ * rule is now active; the accept gate is the git review of `glassray.yaml`.
+ */
+const retiredStateField = z
+  .never({
+    error:
+      'the `state` lifecycle (proposed/watched/archived) was retired — every rule is now active and gated by the git review of glassray.yaml. Remove the `state` field to keep the entry (it becomes active), or delete the entry to drop it.',
+  })
+  .optional();
+
 /** One flow entry in the artifact: membership (portable) + an optional run recipe (LOCAL-ONLY). */
 const artifactFlowSchema = z
-  .object({
+  .strictObject({
     id: slugSchema,
     /** Display name on the target; defaults to the title-cased slug on create. */
     name: z.string().trim().min(1).max(200).optional(),
@@ -56,6 +70,8 @@ const artifactFlowSchema = z
         inputs: z.string().trim().min(1).max(500).optional(),
       })
       .optional(),
+    /** Retired lifecycle key — rejected, not stripped (see `retiredStateField`). */
+    state: retiredStateField,
   })
   .refine((f) => f.membership.selector != null || f.membership.rule != null, {
     message: 'a flow needs a membership selector, a membership rule, or both',
@@ -69,7 +85,7 @@ export const anchorSchema = z.object({
 });
 
 /** One assertion rule in the artifact (== an eval on the target) — mirrors cloud's canonical `FlowRule`. */
-const artifactRuleSchema = z.object({
+const artifactRuleSchema = z.strictObject({
   id: slugSchema,
   /** The flow slug this rule is scoped to; null/absent = global. */
   flow: slugSchema.nullish(),
@@ -86,6 +102,8 @@ const artifactRuleSchema = z.object({
   judge: z.string().trim().min(1).max(200).nullish(),
   /** Pass-rate gate for `check` (0..1); absent = 1.0 (any failure breaches). */
   threshold: z.number().min(0).max(1).nullish(),
+  /** Retired lifecycle key — rejected, not stripped (see `retiredStateField`). */
+  state: retiredStateField,
 });
 
 /** The whole `glassray.yaml` document. */

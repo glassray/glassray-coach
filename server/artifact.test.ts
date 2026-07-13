@@ -213,6 +213,29 @@ describe('artifact import (push)', () => {
     await post('/api/import', { yaml: 'version: 2\n', apply: false }, 400);
   });
 
+  it('rejects a legacy `state` lifecycle key instead of silently activating the rule', async () => {
+    // A repo carrying an old artifact entry (retired proposed/watched/archived
+    // lifecycle) must fail loudly — not be stripped and imported as a gating rule.
+    const legacyYaml = [
+      'version: 1',
+      'flows: []',
+      'rules:',
+      '  - id: legacy-rule',
+      '    text: PASS if fine.',
+      '    state: archived',
+      '',
+    ].join('\n');
+    const rejected = await post('/api/import', { yaml: legacyYaml, apply: false }, 400);
+    expect(rejected.error).toContain('retired');
+
+    // The same guard applies when the rule is passed as a parsed object, not YAML.
+    await post(
+      '/api/import',
+      { artifact: { version: 1, rules: [{ id: 'legacy-rule', text: 'PASS if fine.', state: 'proposed' }] }, apply: false },
+      400,
+    );
+  });
+
   it('imports a fresh file into an empty concept-space (the pull-on-another-target path)', async () => {
     const file = {
       version: 1,
