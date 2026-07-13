@@ -1,6 +1,6 @@
 {
   "name": "@glassray/coach",
-  "version": "0.2.1",
+  "version": "0.2.3",
   "description": "Glassray Coach — a fully self-contained local AI-agent trace debugger (OTLP in, dashboard + agent-first CLI out).",
   "keywords": [
     "ai-agents",
@@ -32,7 +32,7 @@
     "node": ">=20.6"
   },
   "bin": {
-    "glassray": "bin/glassray.mjs"
+    "glassray-coach": "bin/glassray.mjs"
   },
   "files": [
     "bin",

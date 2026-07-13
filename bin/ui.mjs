@@ -300,7 +300,7 @@ export const maybeScheduleUpdateRefresh = (home, spawner = defaultRefreshSpawner
   return true;
 };
 
-/** Live registry probe for `glassray doctor` (the one awaited check); null on any failure. */
+/** Live registry probe for `glassray-coach doctor` (the one awaited check); null on any failure. */
 export const fetchLatestVersion = async (timeoutMs = 3000) => {
   try {
     const res = await fetch('https://registry.npmjs.org/@glassray/coach/latest', {

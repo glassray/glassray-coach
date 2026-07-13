@@ -1,6 +1,6 @@
 /**
- * The glassray landing screen — what the bare `glassray` command (and
- * `glassray help` / `--help`) prints: the mark, a live server probe, the
+ * The glassray landing screen — what the bare `glassray-coach` command (and
+ * `glassray-coach help` / `--help`) prints: the mark, a live server probe, the
  * command reference, and the guide links. Rendering is a pure function of the
  * gathered data so tests can assert on it without a terminal or a server.
  */
@@ -74,10 +74,10 @@ export const COMMAND_SECTIONS = [
 
 /** Worked examples shown on the landing screen (Greptile-style: real invocations, one line each). */
 const EXAMPLE_ROWS = [
-  ['glassray traces list --status error', 'The runs that failed.'],
-  ['glassray discovery run', 'Find recurring failures in recent traces.'],
-  ['glassray flows audit <id>', "Check a flow's classification quality."],
-  ['glassray evals run <id>', "Score a flow's traces against its rule."],
+  ['glassray-coach traces list --status error', 'The runs that failed.'],
+  ['glassray-coach discovery run', 'Find recurring failures in recent traces.'],
+  ['glassray-coach flows audit <id>', "Check a flow's classification quality."],
+  ['glassray-coach evals run <id>', "Score a flow's traces against its rule."],
 ];
 
 /** The LEARN rows at the bottom of the landing screen — links, plus the skill-install commands. */
@@ -86,7 +86,7 @@ const LEARN_ROWS = [
   ['The loop', GUIDES.loop, 'link'],
   ['CLI reference', GUIDES.cli, 'link'],
   ['Source', GUIDES.github, 'link'],
-  ['Agent skill', 'glassray init   ·   npx skills add glassray/glassray-coach', 'cmd'],
+  ['Agent skill', 'glassray-coach init   ·   npx skills add glassray/glassray-coach', 'cmd'],
 ];
 
 /** Fetch a loopback JSON endpoint with a short budget; null on any failure. */
@@ -171,7 +171,7 @@ export const renderLanding = ({ port, probe, width = 80, updateNotice = null, mo
     out.push(`    Ingest      ${probe.ingest}   ${dim(`(key: ${probe.apiKey?.slice(0, 16)}…)`)}`);
   } else {
     out.push(`  ${bullet('down')} No Coach running on port ${port}`);
-    out.push(`    Start one:   ${bold(paint('glassray start', PALETTE.brandBright))}`);
+    out.push(`    Start one:   ${bold(paint('glassray-coach start', PALETTE.brandBright))}`);
   }
   out.push('');
 
@@ -200,7 +200,7 @@ export const renderLanding = ({ port, probe, width = 80, updateNotice = null, mo
     out.push(`    ${label.padEnd(cellWidth)}  ${cell}`);
   }
   out.push('');
-  out.push(`  Run ${bold(paint('glassray <command> --help', PALETTE.brandBright))} for flags, or ${bold(paint('glassray start', PALETTE.brandBright))} to begin.`);
+  out.push(`  Run ${bold(paint('glassray-coach <command> --help', PALETTE.brandBright))} for flags, or ${bold(paint('glassray-coach start', PALETTE.brandBright))} to begin.`);
   if (updateNotice) {
     out.push('');
     out.push(`  ${updateNotice}`);

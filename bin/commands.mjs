@@ -30,24 +30,24 @@ const WAIT_OPTIONS = { 'no-wait': { type: 'boolean', default: false }, timeout: 
 /** Per-resource usage one-liners echoed alongside validation errors. */
 const USAGE = {
   traces:
-    'glassray traces list [--q <s>] [--agent <s>] [--status ok|error] [--flow <id>] [--label <s>] [--limit <n>] [--offset <n>] | get <id> | tail',
-  stats: 'glassray stats',
-  usage: 'glassray usage',
+    'glassray-coach traces list [--q <s>] [--agent <s>] [--status ok|error] [--flow <id>] [--label <s>] [--limit <n>] [--offset <n>] | get <id> | tail',
+  stats: 'glassray-coach stats',
+  usage: 'glassray-coach usage',
   flows:
-    "glassray flows list [--status active|archived|all] | get <id> | create --name <s> [--description <s>] [--rule <s>] [--classify selector|llm] [--selector '<json>'] [--created-by user|claude] | update <id> [--name <s>] [--description <s>] [--rule <s>|--no-rule] [--classify selector|llm] [--selector '<json>'|--no-selector] [--status active|archived] | delete <id> | audit <id> | discover [--code-root <path>] [--file glassray.yaml] [--no-wait] [--timeout <s>]",
+    "glassray-coach flows list [--status active|archived|all] | get <id> | create --name <s> [--description <s>] [--rule <s>] [--classify selector|llm] [--selector '<json>'] [--created-by user|claude] | update <id> [--name <s>] [--description <s>] [--rule <s>|--no-rule] [--classify selector|llm] [--selector '<json>'|--no-selector] [--status active|archived] | delete <id> | audit <id> | discover [--code-root <path>] [--file glassray.yaml] [--no-wait] [--timeout <s>]",
   evals:
-    'glassray evals list | get <id> | create (--deviation <id> [--flow <id>]) or (--name <s> --text <s> [--description <s>] [--flow <id>] [--source-file <path>] [--threshold <0..1>] [--judge <model>] [--autorun-threshold <n>]) | update <id> [--flow <id>|--no-flow] [--source-file <path>|--no-source-file] [--threshold <0..1>|--no-threshold] [--judge <model>|--no-judge] [--autorun-threshold <n>] | run <id> [--sample <n>] [--model <s>] [--no-wait] [--timeout <s>] | delete <id>',
-  deviations: 'glassray deviations list | get <id> | resolve <id> [--reopen]',
-  discovery: 'glassray discovery run [--sample <n>] [--flow <id>] [--no-wait] [--timeout <s>]',
-  fix: 'glassray fix <deviationId> [--no-wait] [--timeout <s>]',
-  runs: 'glassray runs list [--limit <n>] | get <id> | cancel <id>',
-  pull: 'glassray pull [--from local|cloud] [--out glassray.yaml] | --as-fixtures [--flow <id>] [--limit <n>] [--dir glassray/fixtures] | --traces <flow> [-n <count>] [--inputs-dir glassray/inputs]',
-  push: 'glassray push [--file glassray.yaml] [--dry-run] [--prune] [--target local]',
-  check: 'glassray check [--fixtures] [--dir glassray/fixtures] [--sample <n>] [--timeout <s>]',
-  run: 'glassray run <flow> --label <name> [--file glassray.yaml]',
+    'glassray-coach evals list | get <id> | create (--deviation <id> [--flow <id>]) or (--name <s> --text <s> [--description <s>] [--flow <id>] [--source-file <path>] [--threshold <0..1>] [--judge <model>] [--autorun-threshold <n>]) | update <id> [--flow <id>|--no-flow] [--source-file <path>|--no-source-file] [--threshold <0..1>|--no-threshold] [--judge <model>|--no-judge] [--autorun-threshold <n>] | run <id> [--sample <n>] [--model <s>] [--no-wait] [--timeout <s>] | delete <id>',
+  deviations: 'glassray-coach deviations list | get <id> | resolve <id> [--reopen]',
+  discovery: 'glassray-coach discovery run [--sample <n>] [--flow <id>] [--no-wait] [--timeout <s>]',
+  fix: 'glassray-coach fix <deviationId> [--no-wait] [--timeout <s>]',
+  runs: 'glassray-coach runs list [--limit <n>] | get <id> | cancel <id>',
+  pull: 'glassray-coach pull [--from local|cloud] [--out glassray.yaml] | --as-fixtures [--flow <id>] [--limit <n>] [--dir glassray/fixtures] | --traces <flow> [-n <count>] [--inputs-dir glassray/inputs]',
+  push: 'glassray-coach push [--file glassray.yaml] [--dry-run] [--prune] [--target local]',
+  check: 'glassray-coach check [--fixtures] [--dir glassray/fixtures] [--sample <n>] [--timeout <s>]',
+  run: 'glassray-coach run <flow> --label <name> [--file glassray.yaml]',
   compare:
-    'glassray compare [<flow>] <baseline> <candidate> [--flow <id>] [--sample <n>] [--no-wait] [--timeout <s>] — a bare corpus is a run label; prefixed forms: agent:<name> · flow:<id> · fixtures:<dir>',
-  link: 'glassray link <project> [--endpoint <url>] [--token <t>] | link --show',
+    'glassray-coach compare [<flow>] <baseline> <candidate> [--flow <id>] [--sample <n>] [--no-wait] [--timeout <s>] — a bare corpus is a run label; prefixed forms: agent:<name> · flow:<id> · fixtures:<dir>',
+  link: 'glassray-coach link <project> [--endpoint <url>] [--token <t>] | link --show',
 };
 
 /**
@@ -68,7 +68,7 @@ const fail = (message) => {
 const usageFail = (resource, message) => {
   console.error(`${cross()} ${message}`);
   console.error(`  usage: ${USAGE[resource]}`);
-  console.error(`  more:  glassray help ${resource}`);
+  console.error(`  more:  glassray-coach help ${resource}`);
   process.exit(1);
 };
 
@@ -83,7 +83,7 @@ const failUnreachable = (port) => {
 /**
  * Print one resource's help block (assembled from the same USAGE strings the
  * error paths use, so help can never drift from what actually parses). Used by
- * `glassray help <resource>` and `glassray <resource> --help`.
+ * `glassray-coach help <resource>` and `glassray-coach <resource> --help`.
  */
 export const printHelp = (resource) => {
   const variants = USAGE[resource].split(' | ');
@@ -233,7 +233,7 @@ const makeProgress = () => {
  * Poll a background run until it settles, showing live `scanned N/M` progress
  * on a TTY. Returns the run row on 'done'. On 'error': the run's error goes to
  * stderr, the run JSON to stdout, exit 1. On timeout: stderr notes it may still
- * complete (point at `glassray runs get`), exit 1.
+ * complete (point at `glassray-coach runs get`), exit 1.
  */
 const waitForRun = async (port, runId, timeoutSec) => {
   const deadline = Date.now() + timeoutSec * 1000;
@@ -254,7 +254,7 @@ const waitForRun = async (port, runId, timeoutSec) => {
     if (Date.now() >= deadline) {
       progress.clear();
       console.error(
-        `${cross()} run ${runId} did not finish within ${timeoutSec}s — it may still complete; check \`glassray runs get ${runId}\``,
+        `${cross()} run ${runId} did not finish within ${timeoutSec}s — it may still complete; check \`glassray-coach runs get ${runId}\``,
       );
       process.exit(1);
     }
@@ -331,7 +331,7 @@ const tailTraces = async (port) => {
   process.exit(2);
 };
 
-/** `glassray traces list|get <id>|tail` — trace listing, detail, and the live SSE tail. */
+/** `glassray-coach traces list|get <id>|tail` — trace listing, detail, and the live SSE tail. */
 export const cmdTraces = async ({ port, args }) => {
   const verb = args[0];
   if (verb === 'list') {
@@ -364,19 +364,19 @@ export const cmdTraces = async ({ port, args }) => {
   return usageFail('traces', verb === undefined ? 'missing verb' : `unknown verb "${verb}"`);
 };
 
-/** `glassray stats` — GET /api/stats. */
+/** `glassray-coach stats` — GET /api/stats. */
 export const cmdStats = async ({ port, args }) => {
   parseFlags('stats', args, {});
   printJson(await api(port, '/api/stats'));
 };
 
-/** `glassray usage` — GET /api/usage (LLM spend summary). */
+/** `glassray-coach usage` — GET /api/usage (LLM spend summary). */
 export const cmdUsage = async ({ port, args }) => {
   parseFlags('usage', args, {});
   printJson(await api(port, '/api/usage'));
 };
 
-/** `glassray flows …` — durable-flow CRUD, audit, and the flow-discovery run. */
+/** `glassray-coach flows …` — durable-flow CRUD, audit, and the flow-discovery run. */
 export const cmdFlows = async ({ port, args }) => {
   const verb = args[0];
   switch (verb) {
@@ -475,7 +475,7 @@ export const cmdFlows = async ({ port, args }) => {
   }
 };
 
-/** `glassray evals …` — eval CRUD plus judged runs (run waits, then prints the eval with its verdicts). */
+/** `glassray-coach evals …` — eval CRUD plus judged runs (run waits, then prints the eval with its verdicts). */
 export const cmdEvals = async ({ port, args }) => {
   const verb = args[0];
   switch (verb) {
@@ -591,7 +591,7 @@ export const cmdEvals = async ({ port, args }) => {
   }
 };
 
-/** `glassray deviations list|get <id>|resolve <id> [--reopen]`. */
+/** `glassray-coach deviations list|get <id>|resolve <id> [--reopen]`. */
 export const cmdDeviations = async ({ port, args }) => {
   const verb = args[0];
   switch (verb) {
@@ -617,7 +617,7 @@ export const cmdDeviations = async ({ port, args }) => {
   }
 };
 
-/** `glassray discovery run [--sample <n>] [--flow <id>]` — deviation discovery over recent traces. */
+/** `glassray-coach discovery run [--sample <n>] [--flow <id>]` — deviation discovery over recent traces. */
 export const cmdDiscovery = async ({ port, args }) => {
   const verb = args[0];
   if (verb !== 'run') return usageFail('discovery', verb === undefined ? 'missing verb' : `unknown verb "${verb}"`);
@@ -632,7 +632,7 @@ export const cmdDiscovery = async ({ port, args }) => {
   return enqueueAndWait(port, '/api/discovery/run', body, waitOpts('discovery', values));
 };
 
-/** `glassray fix <deviationId>` — run the improver, then print the deviation (it carries fixMarkdown). */
+/** `glassray-coach fix <deviationId>` — run the improver, then print the deviation (it carries fixMarkdown). */
 export const cmdFix = async ({ port, args }) => {
   const { values, positionals } = parseFlags('fix', args, WAIT_OPTIONS);
   const id = requireId('fix', positionals, '<deviationId>');
@@ -679,7 +679,7 @@ const readFixturesDir = async (resource, dir) => {
   try {
     slugs = (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
-    return fail(`no fixtures directory at ${dir} — run \`glassray pull --as-fixtures\` first`);
+    return fail(`no fixtures directory at ${dir} — run \`glassray-coach pull --as-fixtures\` first`);
   }
   const groups = [];
   for (const slug of slugs) {
@@ -701,7 +701,7 @@ const readFixturesDir = async (resource, dir) => {
     }
     if (fixtures.length > 0) groups.push({ slug, fixtures });
   }
-  if (groups.length === 0) return fail(`no fixtures found under ${dir} — run \`glassray pull --as-fixtures\` first`);
+  if (groups.length === 0) return fail(`no fixtures found under ${dir} — run \`glassray-coach pull --as-fixtures\` first`);
   void resource;
   return groups;
 };
@@ -734,7 +734,7 @@ const ingestFixtures = async (port, groups) => {
 /** Default pinned-inputs directory for cloud-pulled traces (`run.inputs` per flow lives under here). */
 const INPUTS_DIR = path.join('glassray', 'inputs');
 
-/** Where `glassray link` records the cloud project ref + auth (mirrors bin/glassray.mjs's home resolution). */
+/** Where `glassray-coach link` records the cloud project ref + auth (mirrors bin/glassray.mjs's home resolution). */
 const linkFilePath = () =>
   path.join(process.env.GLASSRAY_HOME ?? path.join(homedir(), '.glassray'), 'cloud-link.json');
 
@@ -746,7 +746,7 @@ const readLink = async () => {
   } catch {
     // Fall through to the shared failure below.
   }
-  return fail('no cloud project linked — run `glassray link <project> [--endpoint <url>] [--token <t>]` first');
+  return fail('no cloud project linked — run `glassray-coach link <project> [--endpoint <url>] [--token <t>]` first');
 };
 
 /**
@@ -814,7 +814,7 @@ const extractTraceInput = (view) => {
   return nonEmpty(view?.inputPreview);
 };
 
-/** `glassray pull` — artifact (local or cloud), `--as-fixtures` golden traces, or `--traces` real cloud corpora. */
+/** `glassray-coach pull` — artifact (local or cloud), `--as-fixtures` golden traces, or `--traces` real cloud corpora. */
 export const cmdPull = async ({ port, args }) => {
   const { values } = parseFlags('pull', args, {
     from: { type: 'string' },
@@ -930,7 +930,7 @@ export const cmdPull = async ({ port, args }) => {
 };
 
 /**
- * `glassray run <flow> --label <x>` — execute the flow's harness-authored run
+ * `glassray-coach run <flow> --label <x>` — execute the flow's harness-authored run
  * recipe from glassray.yaml. Coach stays dumb: it spawns `run.command` with
  * `GLASSRAY_ENDPOINT` / `GLASSRAY_API_KEY` / `GLASSRAY_RUN_LABEL` and counts
  * what lands under the label; the runner owns reading `run.inputs`, calling
@@ -947,7 +947,7 @@ export const cmdRun = async ({ port, args }) => {
   const file = values.file ?? ARTIFACT_FILE;
 
   const yaml = await readArtifactFileText(file);
-  if (yaml === null) return fail(`cannot read ${file} — author it (or \`glassray pull\`) first`);
+  if (yaml === null) return fail(`cannot read ${file} — author it (or \`glassray-coach pull\`) first`);
   const { artifact } = await post(port, '/api/artifact/parse', { yaml });
   const flow = artifact.flows.find((f) => f.id === flowRef);
   if (!flow) {
@@ -994,7 +994,7 @@ export const cmdRun = async ({ port, args }) => {
   return printJson({ flow: flowRef, label, traces: landed });
 };
 
-/** `glassray link <project> [--endpoint <url>] [--token <t>]` — record the cloud project ref + auth in $GLASSRAY_HOME. */
+/** `glassray-coach link <project> [--endpoint <url>] [--token <t>]` — record the cloud project ref + auth in $GLASSRAY_HOME. */
 export const cmdLink = async ({ args }) => {
   const { values, positionals } = parseFlags('link', args, {
     endpoint: { type: 'string' },
@@ -1015,7 +1015,7 @@ export const cmdLink = async ({ args }) => {
   return printJson({ project, endpoint, hasToken: values.token !== undefined });
 };
 
-/** `glassray push [--file <file>] [--dry-run] [--prune] [--target local]` — reconcile the file into a target. */
+/** `glassray-coach push [--file <file>] [--dry-run] [--prune] [--target local]` — reconcile the file into a target. */
 export const cmdPush = async ({ port, args }) => {
   const { values } = parseFlags('push', args, {
     file: { type: 'string' },
@@ -1031,7 +1031,7 @@ export const cmdPush = async ({ port, args }) => {
   try {
     yaml = await readFile(file, 'utf8');
   } catch {
-    return fail(`cannot read ${file} — run \`glassray pull\` first, or pass --file <path>`);
+    return fail(`cannot read ${file} — run \`glassray-coach pull\` first, or pass --file <path>`);
   }
   const body = await post(port, '/api/import', { yaml, apply: !values['dry-run'], prune: values.prune });
   // The terraform-style plan, one line per action, on stderr.
@@ -1052,7 +1052,7 @@ export const cmdPush = async ({ port, args }) => {
 };
 
 /**
- * `glassray check [--fixtures] [--dir <dir>] [--sample <n>] [--timeout <s>]` —
+ * `glassray-coach check [--fixtures] [--dir <dir>] [--sample <n>] [--timeout <s>]` —
  * run every rule and exit non-zero on any pass-rate below its threshold
  * (default 1.0). Every rule is active — there is no lifecycle gate. With
  * --fixtures the corpus is the committed golden set (hermetic, deterministic —
@@ -1071,7 +1071,7 @@ export const cmdCheck = async ({ port, args }) => {
   const evalList = await api(port, '/api/evals');
   const suite = evalList.items;
   if (suite.length === 0) {
-    return fail('no rules to check — add a rule first (glassray evals create --name <s> --text <s>)');
+    return fail('no rules to check — add a rule first (glassray-coach evals create --name <s> --text <s>)');
   }
 
   // Fixtures mode: re-ingest the committed set, then pin each rule's corpus to it.
@@ -1126,7 +1126,7 @@ export const cmdCheck = async ({ port, args }) => {
 
 /**
  * Parse a compare corpus positional into a corpusRef. A BARE token is a run
- * label (`baseline`, `haiku`, `production` — the `glassray run` output);
+ * label (`baseline`, `haiku`, `production` — the `glassray-coach run` output);
  * prefixed forms name the other corpus kinds: `label:<x>`, `agent:<name>`,
  * `flow:<id>`, `fixtures:<dir>`.
  */
@@ -1190,11 +1190,11 @@ const printCompareSummary = (stats) => {
 };
 
 /**
- * `glassray compare [<flow>] <baseline> <candidate> [--sample <n>]` — the A/B
+ * `glassray-coach compare [<flow>] <baseline> <candidate> [--sample <n>]` — the A/B
  * over the rule suite. Three positionals scope the suite to one flow
  * (by slug, id, or name); two run every global rule. Bare corpora are run
  * labels — the canonical model-swap invocation is
- * `glassray compare digest baseline haiku`.
+ * `glassray-coach compare digest baseline haiku`.
  */
 export const cmdCompare = async ({ port, args }) => {
   const { values, positionals } = parseFlags('compare', args, {
@@ -1222,7 +1222,7 @@ export const cmdCompare = async ({ port, args }) => {
   });
 };
 
-/** `glassray runs list [--limit <n>]|get <id>|cancel <id>` — background-run inspection and cancel. */
+/** `glassray-coach runs list [--limit <n>]|get <id>|cancel <id>` — background-run inspection and cancel. */
 export const cmdRuns = async ({ port, args }) => {
   const verb = args[0];
   switch (verb) {
