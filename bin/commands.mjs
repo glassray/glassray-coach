@@ -642,9 +642,9 @@ export const cmdFix = async ({ port, args }) => {
 };
 
 // ── the portable rule artifact: pull / push / check / compare ────────────────
-// (docs/portable-rule-artifact.md — glassray.yaml round-trips the flows + rules
-// between the repo and a target; fixtures freeze golden traces; check is the CI
-// gate; compare is the change-with-confidence A/B.)
+// (glassray.yaml round-trips the flows + rules between the repo and a target;
+// fixtures freeze golden traces; check is the CI gate; compare is the
+// change-with-confidence A/B.)
 
 /** Default artifact file name, relative to the cwd. */
 const ARTIFACT_FILE = 'glassray.yaml';

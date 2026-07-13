@@ -17,7 +17,7 @@ Requires **Node 20.6+**. Run it once, or install permanently:
 npx @glassray/coach start     # no install
 
 npm i -g @glassray/coach      # …or permanent: `glassray-coach` on your PATH
-glassray-coach start                # (upgrade later when the CLI shows its ▲ notice)
+glassray-coach start          # (upgrade later when the CLI shows its ▲ notice)
 ```
 
 Either boots the server on `http://127.0.0.1:5899/`, opens the dashboard, and prints your local API key plus a
@@ -38,17 +38,19 @@ modes and a walkthrough; `node examples/send-otlp.mjs` sends a single sample tra
 ## What you get
 
 - **Live viewer + replay** — traces stream in as your agent runs; open the span waterfall, edit any LLM call, re-issue it.
-- **Discovery** — an LLM judge clusters where runs went wrong into recurring **deviation types**, each with a plain-language rule.
-- **Durable flows** — name your agent's behaviours once (a selector and/or a plain-language rule); Coach classifies new traffic into them in the background.
-- **Assertion rules with a lifecycle** — freeze any deviation or hand-written rule into a repeatable pass/fail check; `proposed` rules observe, **`watched` rules rerun on their own** as fresh traffic lands and gate `glassray-coach check`, flagging regressions.
+- **Flows discovered from your code** — `glassray-coach flows discover` points a read-only agent (Read/Grep/Glob, rooted at your repo's `codeRoot`) at your agent's own source and maps its flows + rules straight from the code; new traffic then classifies into them in the background.
+- **Durable flows** — or define one yourself. A flow is a named AI workflow your code is built to fulfill — "handle a support ticket", "produce the daily digest" — usually one or more agents working together. Coach matches traffic into it (a deterministic selector and/or a plain-language description) and keeps classifying fresh traces as they land; the rules that judge each run live inside the flow.
+- **Deviation discovery** — an LLM judge clusters where runs went wrong into recurring **deviation types**, each with a plain-language rule.
+- **Rules anchored to your code** — freeze any deviation or hand-written expectation into a repeatable pass/fail check. Every rule is active: it **reruns on its own** as fresh traffic lands, gates `glassray-coach check`, and carries its provenance — `code` (with `{ file, symbol, line }` anchors into your repo) or `promoted` (hand-written / saved from a deviation). Approval is git review of `glassray.yaml`, not an in-app toggle.
 - **The portable rule artifact** — `glassray-coach pull` serializes your flows + rules into a versioned `glassray.yaml` (plus frozen golden traces with `--as-fixtures`); `glassray-coach push` reconciles it back terraform-style; `glassray-coach check --fixtures` is the deterministic CI gate.
 - **The harness loop** — your coding agent authors the flow + rules + a `run` recipe in `glassray.yaml`; `glassray-coach run <flow> --label baseline`, make the change, `run --label candidate`, then `glassray-coach compare <flow> baseline candidate` proves behaviour held — per-rule pass-rate deltas plus an honest price-book **"cost if metered"** per side (never `$0/$0` on the free provider). With a linked cloud project, `glassray-coach pull --traces` makes real production traces the baseline and pins their inputs for the candidate run.
+- **Experiments** — one durable record per question ("can we switch to Haiku?"): an experiment wraps the baseline/candidate compare and generates a report — which rules held or regressed, per-rule pass-rate deltas, and the cost delta. Data, not a verdict; you make the call.
 - **Fix generation** — one paste-into-your-coding-agent instruction doc per deviation: search plan, likely files, ordered edits, acceptance criteria.
 - **Agent-first CLI + skill** — every data command prints the API's JSON verbatim; `glassray-coach init` teaches your coding agent the whole loop.
 - **Runs on your model** — your local `~/.claude` subscription (zero-config), a metered API key, or an offline deterministic `mock`; every metered call is budget-capped (`GLASSRAY_LLM_BUDGET_USD`, default $50).
 
-The loop: **see** traces land → **find** recurring failures → **scope** them as flows + evals → **fix** with your
-coding agent → **verify** hands-free as the evals rerun.
+The loop: **see** traces land → **map** your agent's flows + rules from its code (or find failures in the traffic) →
+**fix** with your coding agent → **prove** the change held with an experiment as the rules rerun.
 
 ## The CLI
 
@@ -101,3 +103,7 @@ never from the server or the data commands.
 - **Guides** — [quickstart](https://glassray.ai/docs/coach/quickstart) · [the loop, worked end to end](https://glassray.ai/docs/coach/analyze) · [CLI & coding agents](https://glassray.ai/docs/coach/cli)
 - **[HTTP API reference](https://github.com/glassray/glassray-coach/blob/main/docs/http-api.md)** — every route
 - **[Development](https://github.com/glassray/glassray-coach/blob/main/docs/DEVELOPMENT.md)** — contributing, layout, env vars, publishing
+
+## License
+
+[MIT](./LICENSE)

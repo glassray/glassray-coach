@@ -9,8 +9,8 @@ import { buildApp } from './app.js';
 import { bootstrap, type CoachRuntime } from './bootstrap.js';
 
 /*
- * The harness-driven local loop (docs/portable-rule-artifact.md v2), end to
- * end on the mock provider: run labels persist from the SDK `environment`
+ * The harness-driven local loop, end to end on the mock provider: run labels
+ * persist from the SDK `environment`
  * attribute and filter the trace list; `glassray run <flow> --label <x>`
  * spawns the recipe with the three env vars and counts what lands; compare
  * resolves `{ label }` corpora and prices each side through the model price

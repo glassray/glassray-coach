@@ -11,7 +11,7 @@ submodule, so keep it free of external workspace dependencies.
 ```sh
 npm run dev         # tsx watch server/index.ts (API on :5899)
 npm run dev:ui      # Vite dev server for web/ — proxies /api + /v1 to :5899
-npm start           # run the server once (tsx server/index.ts) — what `glassray start` wraps
+npm start           # run the server once (tsx server/index.ts) — what `glassray-coach start` wraps
 npm run typecheck   # tsc --noEmit (server + web)
 npm test            # vitest (hermetic: temp GLASSRAY_HOME, ephemeral port)
 npm run test:egress # airgap proof: boot on mock, ingest + discover + flows, assert zero non-loopback sockets
@@ -47,7 +47,7 @@ inside its own provider branch — the `mock` path pulls in nothing beyond zod a
 Human-facing CLI commands (the landing screen, `start`, `status`, `init`) print a one-line notice when a newer
 `@glassray/coach` is known — a detached background child refreshes a cache under `$GLASSRAY_HOME` from
 registry.npmjs.org at most once every 24 hours (3s timeout, silent on failure; skipped for non-TTY stdout), and
-`glassray doctor` performs the one live, awaited check. Opt-outs: `GLASSRAY_NO_UPDATE_CHECK=1`,
+`glassray-coach doctor` performs the one live, awaited check. Opt-outs: `GLASSRAY_NO_UPDATE_CHECK=1`,
 `NO_UPDATE_NOTIFIER`, `CI`. The only data transmitted is the package name in a single HTTPS GET — never from the
 server or the data commands, so trace data stays zero-egress.
 
@@ -66,12 +66,12 @@ The schema is bootstrapped at server start with idempotent `CREATE TABLE IF NOT 
 
 - `server/app.ts` — the Fastify app + run queue, booted by `index.ts` + `bootstrap.ts`; `ingest.ts` / `tail.ts` / `security.ts` — OTLP ingest/upsert, the SSE hub, loopback + bearer guards.
 - `server/llm.ts` — the multi-provider LLM core + free-text span replay (`generateText`).
-- `server/classify.ts` / `flows.ts` — flow selector schema + inline/background classification; flow CRUD, audit, and the discover bootstrap.
-- `server/discovery.ts` / `evals.ts` / `improver.ts` — deviation discovery, the flow-scoped assertion rules (lifecycle `state`: proposed | watched | archived; watched rules autorun + gate `glassray check`), the fix generator; `settings.ts` / `schema.ts` — persisted dashboard settings, the Drizzle schema.
-- `server/artifact.ts` / `compare.ts` — the portable rule artifact (`glassray.yaml` export + terraform-style import; see `docs/portable-rule-artifact.md`) and the two-corpus compare run; `pricing.ts` carries the model price book behind "cost if metered".
+- `server/classify.ts` / `flows.ts` — flow selector schema + inline/background classification; flow CRUD and audit; `code-explore.ts` — code-based flow discovery (a read-only Read/Grep/Glob agent over `codeRoot`, reconciled into flows + code-anchored rules).
+- `server/discovery.ts` / `evals.ts` / `improver.ts` — deviation discovery, the flow-scoped assertion rules (every rule active — autoruns + gates `glassray-coach check`; provenance `source: code | promoted` + `anchors`), the fix generator; `settings.ts` / `schema.ts` — persisted dashboard settings, the Drizzle schema.
+- `server/artifact.ts` / `compare.ts` — the portable rule artifact (`glassray.yaml` export + terraform-style import) and the two-corpus compare run; `experiments.ts` — the durable experiment record + generated report over a compare; `pricing.ts` carries the model price book behind "cost if metered".
 - `server/vendor/` — trace analysis (`buildTraceView`: OTLP normalizer + span-tree + attribute ladders) vendored from hosted Glassray — **refresh by re-copying**, never depend on it.
-- `web/` — the Vite React SPA (nav: Overview / Traces / Deviations / Rules / Compare / Flows, plus Settings), dependency-free CSS charts (`components/charts.tsx`), tail-driven refresh (`useTailRefresh.ts`).
-- `skills/glassray/SKILL.md` — the agent skill `glassray init` installs (shipped in the npm package); `bin/` — the zero-dependency CLI (`glassray.mjs` dispatch, `commands.mjs` data commands, `ui.mjs` + `landing.mjs` branding); `test/egress-proof.mjs` — the airgap proof (socket-layer preload).
+- `web/` — the Vite React SPA (nav: Overview / Flows / Rules / Experiments / Traces, plus Settings), dependency-free CSS charts (`components/charts.tsx`), tail-driven refresh (`useTailRefresh.ts`).
+- `skills/glassray/SKILL.md` — the agent skill `glassray-coach init` installs (shipped in the npm package); `bin/` — the zero-dependency CLI (`glassray.mjs` dispatch, `commands.mjs` data commands, `ui.mjs` + `landing.mjs` branding); `test/egress-proof.mjs` — the airgap proof (socket-layer preload).
 
 The discovery and fix prompts are ports of hosted Glassray's evaluators, adapted to work from traces alone; the
 eval judge and the flow prompts are Coach-original.
@@ -79,7 +79,7 @@ eval judge and the flow prompts are Coach-original.
 ## Publishing
 
 Published to npm as **[`@glassray/coach`](https://www.npmjs.com/package/@glassray/coach)** (scoped, made public
-via `publishConfig.access: public`) with a `glassray` bin. Releases are **automated**: a maintainer runs
+via `publishConfig.access: public`) with a `glassray-coach` bin. Releases are **automated**: a maintainer runs
 `npm run release` (release-it) locally to gate/bump/tag/push + open the GitHub release, and the pushed `v*` tag
 triggers `.github/workflows/release.yml`, which re-runs the gates and does the `npm publish` via **npm trusted
 publishing (OIDC)** — no npm token anywhere, with a provenance attestation. The full runbook and one-time
