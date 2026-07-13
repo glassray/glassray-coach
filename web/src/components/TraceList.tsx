@@ -3,7 +3,7 @@ import type { Info, StatsResponse, TraceFilters, TraceListItem } from "../api";
 import { fetchInfo, fetchStats, fetchTraces } from "../api";
 import { formatDuration, formatNumber, formatTokens, relativeTime, truncate } from "../format";
 import { useTailRefresh } from "../useTailRefresh";
-import { Recipes } from "./Recipes";
+import { AgentHandoff, Recipes } from "./Recipes";
 
 /** How many trace rows are fetched per page (and per "Load more"). */
 const PAGE = 50;
@@ -45,13 +45,32 @@ export const StatusDot = ({ status }: { status: TraceListItem["status"] }) => {
   return <span className={`dot dot-${kind}`} title={label} aria-label={label} />;
 };
 
+/**
+ * Copy text to the clipboard; falls back to a hidden textarea + execCommand
+ * when the async clipboard API is unavailable or blocked (http, iframes).
+ */
+export const copyText = async (text: string): Promise<void> => {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    ta.remove();
+  }
+};
+
 /** Copyable code block used by the empty state to advertise the OTLP endpoint. */
 export const CopyBlock = ({ snippet }: { snippet: string }) => {
   const [copied, setCopied] = useState(false);
 
   /** Copy the snippet to the clipboard and briefly flip the button label. */
   const copy = useCallback(() => {
-    void navigator.clipboard?.writeText(snippet).then(() => {
+    void copyText(snippet).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
     });
@@ -74,13 +93,17 @@ export const EmptyState = ({ info }: { info: Info | null }) => (
   <div className="empty">
     <div className="empty-pulse" aria-hidden="true" />
     <h2 className="empty-title">Waiting for traces</h2>
-    <p className="empty-sub">
-      Let your coding agent set everything up, or instrument by hand — pick your setup:
-    </p>
+    <p className="empty-sub">Coach is listening — your agent just isn&rsquo;t sending traces yet.</p>
     {/* Wait for the real endpoint + key before showing copy-paste recipes, so a
         user never copies a snippet with the wrong port or a placeholder key. */}
     {info ? (
-      <Recipes endpoint={info.ingestEndpoint} apiKey={info.apiKey} agentPrompt={info.agentPrompt} />
+      <>
+        <AgentHandoff prompt={info.agentPrompt} />
+        <div className="empty-divider" role="separator">
+          or instrument by hand
+        </div>
+        <Recipes endpoint={info.ingestEndpoint} apiKey={info.apiKey} />
+      </>
     ) : (
       <p className="empty-hint">Loading your local ingest endpoint…</p>
     )}
