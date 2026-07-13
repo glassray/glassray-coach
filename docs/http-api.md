@@ -79,7 +79,7 @@ Saving a deviation always lands as `proposed` — flip it to `watched` once you 
 
 ## The rule artifact & compare
 
-`glassray.yaml` (docs/portable-rule-artifact.md) is the flows + rules serialized as a
+`glassray.yaml` is the flows + rules serialized as a
 versioned file; identity is the `(kind, id-slug)` pair, never a row id. The CLI verbs
 `pull` / `push` / `check` / `compare` are loopback callers of these routes.
 

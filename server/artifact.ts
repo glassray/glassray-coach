@@ -15,7 +15,6 @@ import { evals, flows } from './schema.js';
  * against the target dbt/terraform-style (create / update / prune) and apply
  * it idempotently. Identity is the `(kind, id-slug)` pair — never the server's
  * random-hex row id — so the same file maps onto different row ids per target.
- * See docs/portable-rule-artifact.md §3–4.
  */
 
 /** A rule/flow slug: the stable, human-chosen identity in the artifact file. */

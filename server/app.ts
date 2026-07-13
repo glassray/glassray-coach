@@ -1189,9 +1189,9 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
   });
 
   // ── the portable rule artifact: export / import / fixtures / compare ───────
-  // (docs/portable-rule-artifact.md — serialize the flows + rules to
-  // glassray.yaml, reconcile a file back in, freeze golden traces, and the A/B
-  // compare that is the local product's reason to exist.)
+  // (serialize the flows + rules to glassray.yaml, reconcile a file back in,
+  // freeze golden traces, and the A/B compare that is the local product's
+  // reason to exist.)
 
   app.get('/api/export', async () => {
     const artifact = await exportArtifact(db);

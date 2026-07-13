@@ -68,7 +68,7 @@ The schema is bootstrapped at server start with idempotent `CREATE TABLE IF NOT 
 - `server/llm.ts` — the multi-provider LLM core + free-text span replay (`generateText`).
 - `server/classify.ts` / `flows.ts` — flow selector schema + inline/background classification; flow CRUD, audit, and the discover bootstrap.
 - `server/discovery.ts` / `evals.ts` / `improver.ts` — deviation discovery, the flow-scoped assertion rules (lifecycle `state`: proposed | watched | archived; watched rules autorun + gate `glassray check`), the fix generator; `settings.ts` / `schema.ts` — persisted dashboard settings, the Drizzle schema.
-- `server/artifact.ts` / `compare.ts` — the portable rule artifact (`glassray.yaml` export + terraform-style import; see `docs/portable-rule-artifact.md`) and the two-corpus compare run; `pricing.ts` carries the model price book behind "cost if metered".
+- `server/artifact.ts` / `compare.ts` — the portable rule artifact (`glassray.yaml` export + terraform-style import) and the two-corpus compare run; `pricing.ts` carries the model price book behind "cost if metered".
 - `server/vendor/` — trace analysis (`buildTraceView`: OTLP normalizer + span-tree + attribute ladders) vendored from hosted Glassray — **refresh by re-copying**, never depend on it.
 - `web/` — the Vite React SPA (nav: Overview / Traces / Deviations / Rules / Compare / Flows, plus Settings), dependency-free CSS charts (`components/charts.tsx`), tail-driven refresh (`useTailRefresh.ts`).
 - `skills/glassray/SKILL.md` — the agent skill `glassray init` installs (shipped in the npm package); `bin/` — the zero-dependency CLI (`glassray.mjs` dispatch, `commands.mjs` data commands, `ui.mjs` + `landing.mjs` branding); `test/egress-proof.mjs` — the airgap proof (socket-layer preload).

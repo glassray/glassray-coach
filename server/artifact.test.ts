@@ -7,8 +7,8 @@ import { buildApp } from './app.js';
 import { bootstrap, type CoachRuntime } from './bootstrap.js';
 
 /*
- * Portable-rule-artifact regression suite (docs/portable-rule-artifact.md), on
- * the deterministic `mock` provider. Boots a hermetic coach, ingests traces,
+ * Portable-rule-artifact regression suite, on the deterministic `mock`
+ * provider. Boots a hermetic coach, ingests traces,
  * builds a flow + rules through the API, then exercises the whole loop:
  * export (slug stamping + file shape) → import (plan / apply / prune /
  * idempotency) → fixtures corpus pinning → the compare run.
