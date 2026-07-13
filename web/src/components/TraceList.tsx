@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Info, StatsResponse, TraceFilters, TraceListItem } from "../api";
-import { fetchInfo, fetchStats, fetchTraces } from "../api";
+import { fetchEvals, fetchFlows, fetchInfo, fetchStats, fetchTraces } from "../api";
 import { formatDuration, formatNumber, formatTokens, relativeTime, truncate } from "../format";
 import { useTailRefresh } from "../useTailRefresh";
 import { AgentHandoff, Recipes } from "./Recipes";
@@ -88,28 +88,101 @@ export const CopyBlock = ({ snippet }: { snippet: string }) => {
   );
 };
 
-/** Shown when no traces exist yet: hand the setup to a coding agent, or instrument by hand. */
-export const EmptyState = ({ info }: { info: Info | null }) => (
-  <div className="empty">
-    <div className="empty-pulse" aria-hidden="true" />
-    <h2 className="empty-title">Waiting for traces</h2>
-    <p className="empty-sub">Coach is listening — your agent just isn&rsquo;t sending traces yet.</p>
-    {/* Wait for the real endpoint + key before showing copy-paste recipes, so a
-        user never copies a snippet with the wrong port or a placeholder key. */}
-    {info ? (
-      <>
-        <AgentHandoff prompt={info.agentPrompt} />
-        <div className="empty-divider" role="separator">
-          or instrument by hand
-        </div>
-        <Recipes endpoint={info.ingestEndpoint} apiKey={info.apiKey} />
-      </>
-    ) : (
-      <p className="empty-hint">Loading your local ingest endpoint…</p>
-    )}
-    <p className="empty-hint">New traces appear live — no refresh needed.</p>
-  </div>
-);
+/** Flow/rule counts that tell the empty state which stage of setup the user is in. */
+const useSetupCounts = () => {
+  const [counts, setCounts] = useState<{ flows: number; rules: number | null } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    // Each count settles independently: the flows count decides the stage, so a
+    // failing rules endpoint must not drag it down to a false cold start. A
+    // failed flows fetch falls back to the onboarding stage (the safer default
+    // on a page with no traces); a failed rules fetch just hides the number.
+    void Promise.allSettled([fetchFlows(), fetchEvals()]).then(([f, e]) => {
+      if (!alive) return;
+      setCounts({
+        flows: f.status === "fulfilled" ? f.value.items.length : 0,
+        rules: e.status === "fulfilled" ? e.value.items.length : null,
+      });
+    });
+    // A hung request must not strand a new user without the setup panels:
+    // after a short grace period, fall back to the cold-start stage (a late
+    // response still upgrades the view when it eventually settles).
+    const fallback = window.setTimeout(() => {
+      if (alive) setCounts((current) => current ?? { flows: 0, rules: null });
+    }, 2000);
+    return () => {
+      alive = false;
+      window.clearTimeout(fallback);
+    };
+  }, []);
+  return counts;
+};
+
+/**
+ * Shown when no traces exist yet — stage-aware. Before any flows exist the job
+ * is SETUP (hand it to a coding agent, or instrument by hand). Once flows/rules
+ * are configured the setup pitch is stale: the job is just RUN YOUR AGENT, with
+ * the instructions one click away for unfinished instrumentation.
+ */
+export const EmptyState = ({ info }: { info: Info | null }) => {
+  const counts = useSetupCounts();
+  const [showSetup, setShowSetup] = useState(false);
+
+  /* Wait for the real endpoint + key before showing copy-paste recipes, so a
+     user never copies a snippet with the wrong port or a placeholder key. */
+  const setupPanels = info ? (
+    <>
+      <AgentHandoff prompt={info.agentPrompt} />
+      <div className="empty-divider" role="separator">
+        or instrument by hand
+      </div>
+      <Recipes endpoint={info.ingestEndpoint} apiKey={info.apiKey} />
+    </>
+  ) : (
+    <p className="empty-hint">Loading your local ingest endpoint…</p>
+  );
+
+  const n = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+  if (counts !== null && counts.flows > 0) {
+    return (
+      <div className="empty">
+        <div className="empty-pulse" aria-hidden="true" />
+        <h2 className="empty-title">Ready — run your agent</h2>
+        <p className="empty-sub">
+          {n(counts.flows, "flow")}
+          {counts.rules !== null && <> and {n(counts.rules, "rule")}</>} are configured. Run your
+          agent and its traces appear here live, classified into their flows.
+        </p>
+        {info && (
+          <p className="empty-hint">
+            Exporting to <code>{info.ingestEndpoint}</code>
+          </p>
+        )}
+        <p className="empty-hint">
+          Traces not landing? <a href="#/flows">Review your flows</a> or{" "}
+          <button type="button" className="empty-link" onClick={() => setShowSetup((s) => !s)}>
+            {showSetup ? "hide the setup instructions" : "show the setup instructions"}
+          </button>
+          .
+        </p>
+        {showSetup && <div className="empty-setup-reveal">{setupPanels}</div>}
+      </div>
+    );
+  }
+
+  return (
+    <div className="empty">
+      <div className="empty-pulse" aria-hidden="true" />
+      <h2 className="empty-title">Waiting for traces</h2>
+      <p className="empty-sub">Coach is listening — your agent just isn&rsquo;t sending traces yet.</p>
+      {/* While the stage is still unknown, hold the panels back for a beat so a
+          configured store doesn't flash the full onboarding pitch. */}
+      {counts !== null && setupPanels}
+      <p className="empty-hint">New traces appear live — no refresh needed.</p>
+    </div>
+  );
+};
 
 /** The default view: a live, newest-first table of captured traces. */
 export const TraceList = () => {
