@@ -105,6 +105,23 @@ const IconCheck = () => (
   </svg>
 );
 
+/** Lightning-bolt icon — the Deviations section. */
+const IconDeviation = () => (
+  <svg
+    viewBox="0 0 24 24"
+    width="18"
+    height="18"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" />
+  </svg>
+);
+
 /** Gear icon — the Settings section. */
 const IconSettings = () => (
   <svg
@@ -129,6 +146,7 @@ const TABS: Array<{ key: TabKey; label: string; href: string; icon: () => ReactE
   { key: "flows", label: "Flows", href: "#/flows", icon: IconFlow },
   { key: "evals", label: "Rules", href: "#/evals", icon: IconCheck },
   { key: "experiments", label: "Experiments", href: "#/experiments", icon: IconFlask },
+  { key: "deviations", label: "Deviations", href: "#/deviations", icon: IconDeviation },
   { key: "traces", label: "Traces", href: "#/traces", icon: IconActivity },
 ];
 
