@@ -43,26 +43,55 @@ glassray-coach evals list
 cat glassray.yaml 2>/dev/null
 ```
 
-Flows, rules, and the artifact file persist across sessions. **Never re-create
-what already exists** — extend or tighten it. If `glassray.yaml` already
-defines the flow you were about to set up, you are resuming previous work.
+Flows and rules live in the SERVER — that is the source of truth, and what the
+dashboard shows. `glassray.yaml` is its committed snapshot. **Never re-create
+what already exists** — extend or tighten it. If the server (or the yaml)
+already covers the flow you were about to set up, you are resuming previous
+work.
 
-## 3 · Set up a flow — from the codebase, not from traffic
+## 3 · Set up flows — server-first, from the codebase
 
-This is what cloud Glassray does from production traffic; you do it from code:
+Work lands in the server as you go — the user watches the dashboard, and state
+that only exists in a file on disk is invisible work. The order:
 
-1. **Discover the flow.** Locate the flow's code: the entry point, its model
-   call(s), the system prompt, and the agent name the tracing uses (the
-   `service.name` / `TraceMeta.agent`). One flow = one behaviour.
-2. **Derive rules from the prompt's implicit contract.** Every constraint the
-   system prompt states or assumes is a candidate assertion rule — "always
-   answer in English", "factual, never invent", "topic is a 1-4 word label".
-   Every rule is active; tie each to the file its expectation is written in with
-   an `anchors:` entry (e.g. `watcher/digest.ts`) — that makes it `source: code`.
-   A rule you can't tie to a file is authored/custom (omit `anchors`, `source:
-   promoted`). Acceptance is the git review of `glassray.yaml`.
-3. **Author `glassray.yaml`** — the flow (membership selector = the agent
-   name), the rules, and the local-only `run` recipe:
+1. **Let Coach discover the flows from code.** Add `codeRoot: <path>` (the
+   agent package's root, relative to `glassray.yaml`) so the dashboard's
+   Discover button works too, then run:
+
+   ```sh
+   glassray-coach flows discover --code-root <path>
+   ```
+
+   Coach reads the source with read-only tools and creates the flows AND their
+   code-anchored rules (`source: code`) directly in the server — one flow per
+   agent graph / chain entry point, one rule per prompt directive.
+
+2. **Review and tighten what it found.** `glassray-coach flows list` +
+   `flows audit <id>`: tighten each selector to the exact runtime names traces
+   will carry (the tracing `agent` / root span name); rewrite or delete vague
+   rules (`evals list`, `evals delete`). Add anything it missed with
+   `flows create` / `evals create --source-file <path>` — create against the
+   server, not by editing the yaml.
+
+3. **Manual fallback** (only when the server has no LLM provider): derive the
+   flows yourself, but hold the same contract Coach's explorer follows — read
+   each flow's PROMPT file before finalizing it; capture the EXACT runtime
+   agent / node names (selectors match against them); ONE rule per directive
+   ("must / never / always / only" each get their own rule — think of each as
+   a test case), each rule one plain sentence a non-engineer can read, anchored
+   to the file it's written in. Then create them with `flows create` /
+   `evals create` — same server-first principle.
+
+4. **Snapshot to git.** `glassray-coach pull` serialises the server's flows +
+   rules into `glassray.yaml`; commit it. The git review of that file is the
+   record of what's running. (`push` is the reverse direction — applying
+   hand-edits of the yaml, or restoring a committed file onto a fresh server.)
+
+5. **Report coverage.** End with an explicit inventory: behaviours found vs
+   instrumented vs skipped-and-why. Partial coverage is fine; silent partial
+   coverage is not.
+
+Then add the local-only `run` recipe to `glassray.yaml`:
 
 ```yaml
 version: 1
@@ -87,7 +116,7 @@ rules:
       - file: src/digest.ts
 ```
 
-4. **Write the runner** (`run.command`). It must: read every input file in
+6. **Write the runner** (`run.command`). It must: read every input file in
    `run.inputs`, call the **real** flow code wrapped in `@glassray/tracing`,
    set the trace `environment` to `process.env.GLASSRAY_RUN_LABEL`, and
    **flush the tracer before exit** (traces that don't land before the process
@@ -109,10 +138,12 @@ for (const file of await readdir('glassray/inputs/digest/')) {
 await flush();                                      // MUST flush before exit
 ```
 
-5. **Instrument tracing if missing.** Prefer a thin traced runner over editing
+7. **Instrument tracing if missing.** Prefer a thin traced runner over editing
    app code: wrap the flow's entry function in the runner script rather than
-   threading the SDK through the application.
-6. **Pin inputs.** No cloud: synthesize a representative set — one JSON file
+   threading the SDK through the application. Verify ONE trace lands end-to-end
+   (`glassray-coach traces list`) before wiring the remaining flows — catch a
+   wiring bug once, not once per flow.
+8. **Pin inputs.** No cloud: synthesize a representative set — one JSON file
    per input in `run.inputs` (`{ "input": … }`), covering the flow's real
    variety (languages, lengths, edge cases; ~10–30 is plenty). Have cloud:
    `glassray-coach pull --traces <flow> -n 30` writes real production inputs there
@@ -124,7 +155,7 @@ no further hand-editing.
 ## 4 · The loop — prove the change held
 
 ```sh
-glassray-coach push                             # sync glassray.yaml's rules into the server
+# flows + rules are already live in the server (§3); the yaml snapshot is committed
 glassray-coach run digest --label baseline      # score the pre-change world
 # … make the change (model swap, prompt edit, refactor) …
 glassray-coach run digest --label candidate
@@ -191,7 +222,7 @@ The loop (stdout = API JSON; long verbs take `--no-wait --timeout`):
 | `glassray-coach pull [--from local\|cloud] [--out]` | Serialize flows + rules into glassray.yaml. Local-only sections (`run`, fixtures/inputs paths) always survive the pull. `--from cloud` also applies the pulled rules to the local server. |
 | `glassray-coach pull --traces <flow> [-n 30]` | Ingest real cloud traces as the `production` corpus + pin their extracted inputs into `glassray/inputs/<flow>/`. |
 | `glassray-coach pull --as-fixtures [--flow --limit --dir]` | Freeze golden traces for the `check` gate. |
-| `glassray-coach push [--file --dry-run --prune]` | Reconcile glassray.yaml into the target (plan on stderr; prune = archive extras). |
+| `glassray-coach push [--file --dry-run --prune]` | The reverse of `pull`: apply yaml hand-edits / restore a committed file onto a fresh server (plan on stderr; prune = archive extras). |
 | `glassray-coach check [--fixtures --dir --sample --timeout]` | Run every rule; exit 1 on a threshold breach. |
 | `glassray-coach link <project> [--endpoint --token] \| link --show` | Record the cloud project + auth for the cloud pulls. |
 
@@ -201,7 +232,8 @@ Data + rules:
 | --- | --- |
 | `glassray-coach traces list [--q --agent --status --flow --label --limit --offset]` / `get <id>` / `tail` | `--label` filters one run's corpus. |
 | `glassray-coach stats` / `glassray-coach usage` | Rollups incl. `estCostIfMeteredUsd`; Coach's own LLM spend. |
-| `glassray-coach flows list/get/create/update/delete/audit/discover` | Durable flows; `audit` = classification quality. |
+| `glassray-coach flows list/get/create/update/delete/audit` | Durable flows; `audit` = classification quality. |
+| `glassray-coach flows discover --code-root <path>` | Code discovery: Coach reads the source and creates flows + code-anchored rules in the server. |
 | `glassray-coach evals list` / `get <id>` | Rules with `name`, `text`, `anchors` (+ `source` code\|promoted), gate `threshold`, latest verdicts + history. |
 | `glassray-coach evals create --name --text [--flow --source-file --threshold --judge --autorun-threshold]` | Hand-written rule (authored/promoted unless `--source-file` sets a code anchor). |
 | `glassray-coach evals create --deviation <id> [--flow]` | Save a discovered deviation as an authored (**promoted**) rule (idempotent). |
