@@ -91,17 +91,26 @@ const isPortFree = (port) =>
     probe.listen(port, '127.0.0.1');
   });
 
-/** Number of captured traces on a running coach; null when the probe fails. */
-const fetchTraceCount = async (port, timeoutMs = 1000) => {
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/stats`, { signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) return null;
-    const stats = await res.json();
-    const traces = stats?.totals?.traces;
-    return typeof traces === 'number' ? traces : null;
-  } catch {
-    return null;
+/**
+ * Whether the running coach has zero captured traces. Retries a couple of
+ * times — right after spawn the stats route can lag /api/info by a beat — and
+ * when the count still can't be read, reports empty: wrongly leading with the
+ * onboarding prompt on a populated store is mild noise, but hiding it on a
+ * fresh store loses a new user entirely.
+ */
+const storeLooksEmpty = async (port) => {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 300));
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/stats`, { signal: AbortSignal.timeout(1000) });
+      if (!res.ok) continue;
+      const traces = (await res.json())?.totals?.traces;
+      if (typeof traces === 'number') return traces === 0;
+    } catch {
+      // Transient probe failure — retry.
+    }
   }
+  return true;
 };
 
 /**
@@ -156,7 +165,7 @@ const cmdStart = async ({ port, dataDir, noOpen }) => {
     if (running) {
       console.log(`glassray already running on port ${port}`);
       printConnectBlock(running, port, readUpdateNotice(home), {
-        empty: (await fetchTraceCount(port)) === 0,
+        empty: await storeLooksEmpty(port),
       });
       if (!noOpen) openBrowser(`http://127.0.0.1:${port}/`);
       return;
@@ -191,7 +200,7 @@ const cmdStart = async ({ port, dataDir, noOpen }) => {
     process.exit(1);
   }
   printConnectBlock(info, port, readUpdateNotice(home), {
-    empty: (await fetchTraceCount(port)) === 0,
+    empty: await storeLooksEmpty(port),
   });
   if (!noOpen) openBrowser(`http://127.0.0.1:${port}/`);
 };
