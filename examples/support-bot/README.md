@@ -91,16 +91,17 @@ node bin/glassray.mjs flows create --name "Refund requests" \
 ```
 
 The selector flow materializes its members instantly; the rule flow is picked up by
-the **background classify sweep** over the newest traces. `glassray flows list` shows
-both with live member counts; `glassray flows get <id>` shows every member with how
-it was assigned. (You can also let Coach propose flows from the traffic itself —
-**Discover flows** / `glassray flows discover` — then tighten what it finds.)
+the **background classify sweep** over the newest traces. `glassray-coach flows list` shows
+both with live member counts; `glassray-coach flows get <id>` shows every member with how
+it was assigned. (You can also let Coach map flows from the agent's own source code —
+**Discover flows** / `glassray-coach flows discover --code-root examples/support-bot` —
+then tighten what it finds.)
 
 > Classification is deliberately iterative, and this selector proves it:
-> `glassray flows audit <flowId>` shows 4 members — but one is "How do I redeem a
+> `glassray-coach flows audit <flowId>` shows 4 members — but one is "How do I redeem a
 > **gift card**?" (an over-match), while t29 ("Charge my **amex** 3400…") never says
 > "card" and slipped through (an under-match). That's the audit's job — spot both,
-> then tighten: `glassray flows update <id> --no-selector --classify llm --rule "The
+> then tighten: `glassray-coach flows update <id> --no-selector --classify llm --rule "The
 > customer is changing the payment card on file, including by brand name"` (drop the
 > substring selector too, or its matches remain active alongside the rule) and the sweep
 > re-derives membership from intent instead of substrings. Like discovery, the
@@ -119,13 +120,13 @@ node bin/glassray.mjs evals update <evalId> --autorun-threshold 3
 
 # or hand-write one:
 node bin/glassray.mjs evals create --flow <cardFlowId> --autorun-threshold 3 \
-  --label "No full card numbers" \
-  --rule "The reply must never contain a full card number — refer to cards by their last 4 digits only."
+  --name "No full card numbers" \
+  --text "The reply must never contain a full card number — refer to cards by their last 4 digits only."
 ```
 
 A flow-scoped eval samples **only that flow's traces** — the card eval never wastes
 a judge call on a shipping question. Baseline each one now
-(`glassray evals run <id>`): it fails on the buggy corpus, as it should.
+(`glassray-coach evals run <id>`): it fails on the buggy corpus, as it should.
 
 ## 5. Ship the fix — and watch the loop close itself
 
@@ -161,15 +162,15 @@ original. The viewer becomes a debugger.
 With Coach running, install the agent skill into this repo (Claude Code, Codex, Copilot):
 
 ```sh
-glassray init          # installs the skill for Claude Code, Codex & Copilot
+glassray-coach init          # installs the skill for Claude Code, Codex & Copilot
 ```
 
 Then everything above becomes something you can simply ask for: *"set up flows and
 evals for the support bot from its policy"* (Claude reads `SYSTEM_PROMPT` in
 `support-bot.mjs` — the three policy lines are the three evals), *"which traces
 echoed a full card number?"*, or *"run discovery and fix what it finds"* — Claude
-drives the same flows, deviations, and evals through the `glassray` CLI, and
-`glassray fix <deviationId>` hands it repo-ready instructions to apply.
+drives the same flows, deviations, and evals through the `glassray-coach` CLI, and
+`glassray-coach fix <deviationId>` hands it repo-ready instructions to apply.
 
 ---
 
@@ -195,7 +196,7 @@ option, run discovery *before* the audience arrives and demo the finished result
    traces. "Eleven wrong answers. Zero errors. Your error rate never saw them."
 7. **Save as eval** on each, bound to its flow (threshold 3), run one for a baseline.
    "The finding is now a test — scoped to exactly the behaviour it's about."
-8. Run `--fixed` and **touch nothing** — narrate `glassray runs list` as the classify
+8. Run `--fixed` and **touch nothing** — narrate `glassray-coach runs list` as the classify
    sweep and the autorun eval runs appear, then show the climbing pass rates.
    "Discovery finds it, flows scope it, evals lock it in, and the reruns are
    hands-free. That's the loop."
