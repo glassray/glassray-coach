@@ -144,7 +144,7 @@ describe('glassray server', () => {
     expect(res.status).toBe(404);
   });
 
-  it('reports name, version, ingest endpoint and key via GET /api/info', async () => {
+  it('reports name, version, ingest endpoint, key and agent prompt via GET /api/info', async () => {
     const res = await fetch(`${baseUrl}/api/info`);
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
@@ -152,11 +152,15 @@ describe('glassray server', () => {
       version: string;
       ingestEndpoint: string;
       apiKey: string;
+      agentPrompt: string;
     };
     expect(body.name).toBe('glassray');
     expect(body.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(body.ingestEndpoint).toBe(`${baseUrl}/v1/traces`);
     expect(body.apiKey).toBe(apiKey);
     expect(body.apiKey).toMatch(/^glsk_local_[0-9a-f]{48}$/);
+    // The onboarding prompt is the same everywhere and carries the live wiring.
+    expect(body.agentPrompt).toContain(body.ingestEndpoint);
+    expect(body.agentPrompt).toContain(body.apiKey);
   });
 });

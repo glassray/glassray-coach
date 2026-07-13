@@ -91,8 +91,26 @@ const isPortFree = (port) =>
     probe.listen(port, '127.0.0.1');
   });
 
-/** Prints the branded connection card (dashboard, ingest, key, OTEL env, next steps). */
-const printConnectBlock = (info, port, updateNotice = null) => {
+/** Number of captured traces on a running coach; null when the probe fails. */
+const fetchTraceCount = async (port, timeoutMs = 1000) => {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/stats`, { signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return null;
+    const stats = await res.json();
+    const traces = stats?.totals?.traces;
+    return typeof traces === 'number' ? traces : null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Prints the branded connection card (dashboard, ingest, key, next steps).
+ * On an empty store the hand-off prompt from /api/info leads — paste it into a
+ * coding agent and it does the wiring — with the manual OTLP env as the
+ * fallback for stores that already have traffic.
+ */
+const printConnectBlock = (info, port, updateNotice = null, { empty = false } = {}) => {
   const dashboard = `http://127.0.0.1:${port}/`;
   console.log('');
   console.log(`  ${compactBrand()}`);
@@ -102,11 +120,22 @@ const printConnectBlock = (info, port, updateNotice = null) => {
   console.log(`    Ingest      ${info.ingestEndpoint}`);
   console.log(`    API key     ${info.apiKey}`);
   console.log('');
-  console.log("  Point your agent's OTLP exporter at it:");
-  console.log('');
-  console.log(`    export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${port}"`);
-  console.log('    export OTEL_EXPORTER_OTLP_PROTOCOL="http/json"');
-  console.log(`    export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${info.apiKey}"`);
+  if (empty && info.agentPrompt) {
+    console.log('  Nothing is instrumented yet. Paste this into Claude Code (or any coding');
+    console.log('  agent) — it wires tracing, flows, and rules; then just run your agent:');
+    console.log('');
+    console.log(`  ${dim('─'.repeat(72))}`);
+    // The prompt is printed verbatim (no indent, no color) so a triple-click
+    // or terminal copy grabs exactly what the coding agent should receive.
+    console.log(info.agentPrompt);
+    console.log(`  ${dim('─'.repeat(72))}`);
+  } else {
+    console.log("  Point your agent's OTLP exporter at it:");
+    console.log('');
+    console.log(`    export OTEL_EXPORTER_OTLP_ENDPOINT="http://127.0.0.1:${port}"`);
+    console.log('    export OTEL_EXPORTER_OTLP_PROTOCOL="http/json"');
+    console.log(`    export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${info.apiKey}"`);
+  }
   console.log('');
   console.log(
     `  Next: ${paint('glassray-coach init', PALETTE.brand)} in your agent's repo · quickstart ${link(GUIDES.quickstart)}`,
@@ -126,7 +155,9 @@ const cmdStart = async ({ port, dataDir, noOpen }) => {
     const running = await fetchInfo(port);
     if (running) {
       console.log(`glassray already running on port ${port}`);
-      printConnectBlock(running, port, readUpdateNotice(home));
+      printConnectBlock(running, port, readUpdateNotice(home), {
+        empty: (await fetchTraceCount(port)) === 0,
+      });
       if (!noOpen) openBrowser(`http://127.0.0.1:${port}/`);
       return;
     }
@@ -159,7 +190,9 @@ const cmdStart = async ({ port, dataDir, noOpen }) => {
     child.kill('SIGTERM');
     process.exit(1);
   }
-  printConnectBlock(info, port, readUpdateNotice(home));
+  printConnectBlock(info, port, readUpdateNotice(home), {
+    empty: (await fetchTraceCount(port)) === 0,
+  });
   if (!noOpen) openBrowser(`http://127.0.0.1:${port}/`);
 };
 

@@ -16,6 +16,8 @@ export interface Info {
   version: string;
   ingestEndpoint: string;
   apiKey: string;
+  /** Paste-into-your-coding-agent onboarding prompt, wiring already baked in. */
+  agentPrompt: string;
 }
 
 /** One row of GET /api/traces — a compact summary for the list table. */

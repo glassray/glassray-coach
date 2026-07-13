@@ -69,18 +69,18 @@ export const CopyBlock = ({ snippet }: { snippet: string }) => {
   );
 };
 
-/** Shown when no traces exist yet: how to point an OTLP exporter at this server. */
+/** Shown when no traces exist yet: hand the setup to a coding agent, or instrument by hand. */
 export const EmptyState = ({ info }: { info: Info | null }) => (
   <div className="empty">
     <div className="empty-pulse" aria-hidden="true" />
     <h2 className="empty-title">Waiting for traces</h2>
     <p className="empty-sub">
-      Instrument your agent, then send spans here — pick your setup:
+      Let your coding agent set everything up, or instrument by hand — pick your setup:
     </p>
     {/* Wait for the real endpoint + key before showing copy-paste recipes, so a
         user never copies a snippet with the wrong port or a placeholder key. */}
     {info ? (
-      <Recipes endpoint={info.ingestEndpoint} apiKey={info.apiKey} />
+      <Recipes endpoint={info.ingestEndpoint} apiKey={info.apiKey} agentPrompt={info.agentPrompt} />
     ) : (
       <p className="empty-hint">Loading your local ingest endpoint…</p>
     )}

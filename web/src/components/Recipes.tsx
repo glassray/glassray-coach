@@ -12,9 +12,11 @@ interface Recipe {
 const baseOf = (endpoint: string): string => endpoint.replace(/\/v1\/traces$/, "");
 
 /*
- * The instrumentation on-ramp. Coach ingests OTLP/JSON, so every recipe either
- * uses the @glassray/tracing SDK (which speaks it natively) or points a standard
- * OTel exporter at the endpoint with `http/json`. Ordered easiest-first.
+ * The instrumentation on-ramp, ordered easiest-first: the coding-agent prompt
+ * (paste it into Claude Code / Codex / Copilot and it does the wiring for you)
+ * comes first, then the manual recipes. Coach ingests OTLP/JSON, so every
+ * manual recipe either uses the @glassray/tracing SDK (which speaks it
+ * natively) or points a standard OTel exporter at the endpoint with `http/json`.
  */
 const RECIPES: Recipe[] = [
   {
@@ -86,13 +88,27 @@ Content-Type: application/json
 ];
 
 /** Tabbed copy-paste instrumentation recipes for the empty state. */
-export const Recipes = ({ endpoint, apiKey }: { endpoint: string; apiKey: string }) => {
-  const [active, setActive] = useState(RECIPES[0]!.key);
-  const recipe = useMemo(() => RECIPES.find((r) => r.key === active) ?? RECIPES[0]!, [active]);
+export const Recipes = ({
+  endpoint,
+  apiKey,
+  agentPrompt,
+}: {
+  endpoint: string;
+  apiKey: string;
+  /** The server-built onboarding prompt — the default, easiest-first tab. */
+  agentPrompt: string;
+}) => {
+  // The coding-agent hand-off leads; the manual recipes stay one tab away.
+  const recipes = useMemo<Recipe[]>(
+    () => [{ key: "agent", label: "Coding agent", snippet: () => agentPrompt }, ...RECIPES],
+    [agentPrompt],
+  );
+  const [active, setActive] = useState(recipes[0]!.key);
+  const recipe = useMemo(() => recipes.find((r) => r.key === active) ?? recipes[0]!, [recipes, active]);
   return (
     <div className="recipes">
       <div className="recipe-tabs" role="tablist">
-        {RECIPES.map((r) => (
+        {recipes.map((r) => (
           <button
             key={r.key}
             type="button"
@@ -105,6 +121,12 @@ export const Recipes = ({ endpoint, apiKey }: { endpoint: string; apiKey: string
           </button>
         ))}
       </div>
+      {recipe.key === "agent" && (
+        <p className="empty-hint">
+          Paste this into Claude Code (or any coding agent) — it wires tracing, sets up flows and
+          rules, and then you only run your agent.
+        </p>
+      )}
       <CopyBlock snippet={recipe.snippet(endpoint, apiKey)} />
     </div>
   );
