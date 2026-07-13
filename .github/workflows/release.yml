@@ -1,0 +1,41 @@
+# Publishes @glassray/coach to npm when a release tag lands. The local
+# `npm run release` (release-it) still owns gates/bump/build/commit/tag/push +
+# the GitHub release; this workflow owns the npm publish, via npm trusted
+# publishing (OIDC) — no maintainer laptop and no long-lived npm token in the
+# publish path, and npm attaches a provenance attestation automatically.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  # OIDC token for npm trusted publishing — the only credential used.
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: package-lock.json
+      # Trusted publishing requires npm >= 11.5.1 — Node 24's bundled npm
+      # satisfies that. Do NOT self-upgrade npm here: overwriting the running
+      # npm can corrupt its bundled deps (missing `sigstore` → publish crash).
+      - run: npm --version
+      - run: npm ci --no-audit --no-fund
+      # Re-run the CI gates — a tag can't ship code that doesn't pass them.
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:egress
+      # Plain `npm publish` (no pnpm pack): coach ships `server/*.ts` run via
+      # tsx with no dev/publish `exports` rewrite, so the manifest is already
+      # what consumers get. `prepack` builds the SPA into `web/dist`, then the
+      # `files` whitelist packs it; npm does the OIDC exchange and attaches
+      # provenance. See RELEASING.md.
+      - run: npm publish

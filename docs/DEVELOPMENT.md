@@ -79,12 +79,15 @@ eval judge and the flow prompts are Coach-original.
 ## Publishing
 
 Published to npm as **[`@glassray/coach`](https://www.npmjs.com/package/@glassray/coach)** (scoped, made public
-via `publishConfig.access: public`) with a `glassray` bin. To cut a release:
+via `publishConfig.access: public`) with a `glassray` bin. Releases are **automated**: a maintainer runs
+`npm run release` (release-it) locally to gate/bump/tag/push + open the GitHub release, and the pushed `v*` tag
+triggers `.github/workflows/release.yml`, which re-runs the gates and does the `npm publish` via **npm trusted
+publishing (OIDC)** — no npm token anywhere, with a provenance attestation. The full runbook and one-time
+trusted-publisher setup are in **[`RELEASING.md`](../RELEASING.md)**:
 
 ```sh
-npm login          # as a member of the @glassray org
-npm version patch
-npm publish        # runs `prepack` (builds web/dist), packs, publishes public
+npm run release:dry   # rehearsal — changes nothing
+npm run release       # gates, bump, tag, push, GitHub release; CI publishes
 ```
 
 `prepack` builds the SPA into `web/dist`; the `files` whitelist then ships `bin/`, the runtime `server/*.ts`
