@@ -37,8 +37,11 @@ const USAGE = {
     "glassray-coach flows list [--status active|archived|all] | get <id> | create --name <s> [--description <s>] [--rule <s>] [--classify selector|llm] [--selector '<json>'] [--created-by user|claude] | update <id> [--name <s>] [--description <s>] [--rule <s>|--no-rule] [--classify selector|llm] [--selector '<json>'|--no-selector] [--status active|archived] | delete <id> | audit <id> | discover [--code-root <path>] [--file glassray.yaml] [--no-wait] [--timeout <s>]",
   evals:
     'glassray-coach evals list | get <id> | create (--deviation <id> [--flow <id>]) or (--name <s> --text <s> [--description <s>] [--flow <id>] [--source-file <path>] [--threshold <0..1>] [--judge <model>] [--autorun-threshold <n>]) | update <id> [--flow <id>|--no-flow] [--source-file <path>|--no-source-file] [--threshold <0..1>|--no-threshold] [--judge <model>|--no-judge] [--autorun-threshold <n>] | run <id> [--sample <n>] [--model <s>] [--no-wait] [--timeout <s>] | delete <id>',
-  deviations: 'glassray-coach deviations list | get <id> | resolve <id> [--reopen]',
-  discovery: 'glassray-coach discovery run [--sample <n>] [--flow <id>] [--no-wait] [--timeout <s>]',
+  deviations:
+    'glassray-coach deviations list | get <id> | resolve <id> [--reopen] | discover [--sample <n>] [--flow <id>] [--no-wait] [--timeout <s>]',
+  discovery:
+    'glassray-coach discovery run [--sample <n>] [--flow <id>] [--no-wait] [--timeout <s>] — alias of `deviations discover`',
+  experiments: 'glassray-coach experiments list [--flow <id>] | get <id>',
   fix: 'glassray-coach fix <deviationId> [--no-wait] [--timeout <s>]',
   runs: 'glassray-coach runs list [--limit <n>] | get <id> | cancel <id>',
   pull: 'glassray-coach pull [--from local|cloud] [--out glassray.yaml] | --as-fixtures [--flow <id>] [--limit <n>] [--dir glassray/fixtures] | --traces <flow> [-n <count>] [--inputs-dir glassray/inputs]',
@@ -591,7 +594,27 @@ export const cmdEvals = async ({ port, args }) => {
   }
 };
 
-/** `glassray-coach deviations list|get <id>|resolve <id> [--reopen]`. */
+/**
+ * The discovery-run action: cluster recent traces into recurring failures
+ * (deviations). Shared by the canonical `deviations discover` and its
+ * `discovery run` alias — identical flags (--sample, --flow, --no-wait,
+ * --timeout), the same `/api/discovery/run` enqueue, no behavior difference.
+ * `resource` scopes the usage line shown on a flag error to whichever spelling
+ * the caller used.
+ */
+const runDiscovery = (port, args, resource) => {
+  const { values } = parseFlags(resource, args, {
+    sample: { type: 'string' },
+    flow: { type: 'string' },
+    ...WAIT_OPTIONS,
+  });
+  const body = {};
+  if (values.sample !== undefined) body.sampleSize = toInt(resource, 'sample', values.sample, 1);
+  if (values.flow !== undefined) body.flowId = values.flow;
+  return enqueueAndWait(port, '/api/discovery/run', body, waitOpts(resource, values));
+};
+
+/** `glassray-coach deviations list|get <id>|resolve <id> [--reopen]|discover …`. */
 export const cmdDeviations = async ({ port, args }) => {
   const verb = args[0];
   switch (verb) {
@@ -612,24 +635,19 @@ export const cmdDeviations = async ({ port, args }) => {
       const action = values.reopen ? 'reopen' : 'resolve';
       return printJson(await post(port, `/api/deviations/${encodeURIComponent(id)}/${action}`));
     }
+    case 'discover':
+      // The canonical spelling of the discovery-run action; `discovery run` aliases it.
+      return runDiscovery(port, args.slice(1), 'deviations');
     default:
       return usageFail('deviations', verb === undefined ? 'missing verb' : `unknown verb "${verb}"`);
   }
 };
 
-/** `glassray-coach discovery run [--sample <n>] [--flow <id>]` — deviation discovery over recent traces. */
+/** `glassray-coach discovery run [--sample <n>] [--flow <id>]` — alias of the canonical `deviations discover`. */
 export const cmdDiscovery = async ({ port, args }) => {
   const verb = args[0];
   if (verb !== 'run') return usageFail('discovery', verb === undefined ? 'missing verb' : `unknown verb "${verb}"`);
-  const { values } = parseFlags('discovery', args.slice(1), {
-    sample: { type: 'string' },
-    flow: { type: 'string' },
-    ...WAIT_OPTIONS,
-  });
-  const body = {};
-  if (values.sample !== undefined) body.sampleSize = toInt('discovery', 'sample', values.sample, 1);
-  if (values.flow !== undefined) body.flowId = values.flow;
-  return enqueueAndWait(port, '/api/discovery/run', body, waitOpts('discovery', values));
+  return runDiscovery(port, args.slice(1), 'discovery');
 };
 
 /** `glassray-coach fix <deviationId>` — run the improver, then print the deviation (it carries fixMarkdown). */
@@ -1242,5 +1260,29 @@ export const cmdRuns = async ({ port, args }) => {
     }
     default:
       return usageFail('runs', verb === undefined ? 'missing verb' : `unknown verb "${verb}"`);
+  }
+};
+
+/**
+ * `glassray-coach experiments list [--flow <id>]|get <id>` — read-only view of
+ * the durable compare experiments (GET /api/experiments[?flowId=…] and
+ * /api/experiments/:id). Deliberately list/get only; the write endpoints
+ * (create / report) are not surfaced here.
+ */
+export const cmdExperiments = async ({ port, args }) => {
+  const verb = args[0];
+  switch (verb) {
+    case 'list': {
+      // The endpoint takes an optional `flowId` scope; surface it as `--flow`.
+      const { values } = parseFlags('experiments', args.slice(1), { flow: { type: 'string' } });
+      return printJson(await api(port, `/api/experiments${toQuery({ flowId: values.flow })}`));
+    }
+    case 'get': {
+      const { positionals } = parseFlags('experiments', args.slice(1), {});
+      const id = requireId('experiments', positionals);
+      return printJson(await api(port, `/api/experiments/${encodeURIComponent(id)}`));
+    }
+    default:
+      return usageFail('experiments', verb === undefined ? 'missing verb' : `unknown verb "${verb}"`);
   }
 };
