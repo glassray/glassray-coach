@@ -90,19 +90,29 @@ export const CopyBlock = ({ snippet }: { snippet: string }) => {
 
 /** Flow/rule counts that tell the empty state which stage of setup the user is in. */
 const useSetupCounts = () => {
-  const [counts, setCounts] = useState<{ flows: number; rules: number } | null>(null);
+  const [counts, setCounts] = useState<{ flows: number; rules: number | null } | null>(null);
   useEffect(() => {
     let alive = true;
-    void Promise.all([fetchFlows(), fetchEvals()])
-      .then(([f, e]) => {
-        if (alive) setCounts({ flows: f.items.length, rules: e.items.length });
-      })
-      // Counts are a display hint only — on failure fall back to the onboarding stage.
-      .catch(() => {
-        if (alive) setCounts({ flows: 0, rules: 0 });
+    // Each count settles independently: the flows count decides the stage, so a
+    // failing rules endpoint must not drag it down to a false cold start. A
+    // failed flows fetch falls back to the onboarding stage (the safer default
+    // on a page with no traces); a failed rules fetch just hides the number.
+    void Promise.allSettled([fetchFlows(), fetchEvals()]).then(([f, e]) => {
+      if (!alive) return;
+      setCounts({
+        flows: f.status === "fulfilled" ? f.value.items.length : 0,
+        rules: e.status === "fulfilled" ? e.value.items.length : null,
       });
+    });
+    // A hung request must not strand a new user without the setup panels:
+    // after a short grace period, fall back to the cold-start stage (a late
+    // response still upgrades the view when it eventually settles).
+    const fallback = window.setTimeout(() => {
+      if (alive) setCounts((current) => current ?? { flows: 0, rules: null });
+    }, 2000);
     return () => {
       alive = false;
+      window.clearTimeout(fallback);
     };
   }, []);
   return counts;
@@ -140,8 +150,9 @@ export const EmptyState = ({ info }: { info: Info | null }) => {
         <div className="empty-pulse" aria-hidden="true" />
         <h2 className="empty-title">Ready — run your agent</h2>
         <p className="empty-sub">
-          {n(counts.flows, "flow")} and {n(counts.rules, "rule")} are configured. Run your agent and
-          its traces appear here live, classified into their flows.
+          {n(counts.flows, "flow")}
+          {counts.rules !== null && <> and {n(counts.rules, "rule")}</>} are configured. Run your
+          agent and its traces appear here live, classified into their flows.
         </p>
         {info && (
           <p className="empty-hint">
