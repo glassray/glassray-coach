@@ -34,6 +34,7 @@ import {
   newestTwoLabels,
 } from './experiments.js';
 import { claimQueuedRun, createRun, failRun, runDiscovery, type RunKind } from './discovery.js';
+import { buildAgentPrompt } from './onboarding.js';
 import {
   autorunDueEvals,
   createEvalFromDeviation,
@@ -505,11 +506,13 @@ export const buildApp = async ({ runtime, port = 5899 }: BuildAppOptions): Promi
   app.get('/api/info', async () => {
     const address = app.server.address();
     const boundPort = typeof address === 'object' && address !== null ? address.port : port;
+    const ingestEndpoint = `http://127.0.0.1:${boundPort}/v1/traces`;
     return {
       name: 'glassray',
       version: pkg.version,
-      ingestEndpoint: `http://127.0.0.1:${boundPort}/v1/traces`,
+      ingestEndpoint,
       apiKey,
+      agentPrompt: buildAgentPrompt({ ingestEndpoint, apiKey }),
     };
   });
 

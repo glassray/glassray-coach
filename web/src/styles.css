@@ -476,9 +476,9 @@ a {
 /* ---------- Empty states ---------- */
 
 .empty {
-  max-width: 620px;
+  max-width: 660px;
   margin: 56px auto;
-  padding: 40px 32px;
+  padding: 44px 36px;
   text-align: center;
   background: var(--card);
   border: 1px solid var(--border);
@@ -1394,6 +1394,161 @@ a {
 }
 .row-error td:first-child {
   box-shadow: inset 2px 0 0 var(--destructive);
+}
+
+/* ── Empty-state coding-agent hand-off (the primary on-ramp) ────────────────── */
+.handoff {
+  text-align: left;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  /* A whisper of brand along the top marks it as the recommended path. */
+  box-shadow:
+    var(--shadow-card),
+    inset 0 2px 0 var(--brand);
+}
+.handoff-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 18px 20px 0;
+}
+.handoff-kicker {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--brand);
+}
+.handoff-title {
+  margin-top: 3px;
+  font-size: 1.02rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+}
+.handoff-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 16px;
+  font: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.1s ease;
+}
+.handoff-copy:hover {
+  transform: translateY(-1px);
+}
+.handoff-copy:active {
+  transform: translateY(0);
+}
+.handoff-copy-done {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: var(--brand-foreground);
+}
+.handoff-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  margin: 18px 0;
+  padding: 0 20px;
+  list-style: none;
+}
+.handoff-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+}
+.handoff-step-n {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  color: var(--brand);
+  background: rgba(22, 101, 52, 0.1);
+  border-radius: 50%;
+}
+.handoff-steps b {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--foreground);
+}
+.handoff-steps small {
+  display: block;
+  margin-top: 1px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted-foreground);
+}
+@media (max-width: 640px) {
+  .handoff-steps {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+}
+.handoff-prewrap {
+  position: relative;
+  background: var(--subtle);
+  border-top: 1px solid var(--border);
+}
+/* Fade the last lines out instead of clipping them — signals "scroll for more". */
+.handoff-prewrap::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 36px;
+  background: linear-gradient(rgba(243, 243, 243, 0), var(--subtle));
+  pointer-events: none;
+}
+.handoff-pre {
+  margin: 0;
+  padding: 16px 20px 40px;
+  max-height: 230px;
+  overflow-y: auto;
+  /* Soft-wrap: the prompt must never clip or scroll horizontally. */
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--muted-foreground);
+  scrollbar-width: thin;
+}
+
+/* The quiet "or instrument by hand" seam between the two on-ramps. */
+.empty-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 22px 0 14px;
+  font-size: 12px;
+  color: var(--muted-foreground);
+}
+.empty-divider::before,
+.empty-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
 }
 
 /* ── Empty-state instrumentation recipes (M5 on-ramp) ───────────────────────── */
