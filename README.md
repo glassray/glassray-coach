@@ -53,7 +53,7 @@ coding agent → **verify** hands-free as the evals rerun.
 ## The CLI
 
 ```sh
-glassray                 # branded landing screen: server status, every command, guide links
+glassray-coach           # branded landing screen: server status, every command, guide links
 glassray-coach <command> --help
 ```
 
