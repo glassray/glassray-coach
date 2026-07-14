@@ -17,6 +17,7 @@ import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { MANAGEMENT_COMMANDS, showLanding } from './landing.mjs';
+import { offerOnboarding } from './onboard.mjs';
 import {
   GUIDES,
   PALETTE,
@@ -119,7 +120,7 @@ const storeLooksEmpty = async (port) => {
  * coding agent and it does the wiring — with the manual OTLP env as the
  * fallback for stores that already have traffic.
  */
-const printConnectBlock = (info, port, updateNotice = null, { empty = false } = {}) => {
+const printConnectBlock = (info, port, updateNotice = null, { empty = false, interactive = false } = {}) => {
   const dashboard = `http://127.0.0.1:${port}/`;
   console.log('');
   console.log(`  ${compactBrand()}`);
@@ -129,6 +130,17 @@ const printConnectBlock = (info, port, updateNotice = null, { empty = false } = 
   console.log(`    Ingest      ${info.ingestEndpoint}`);
   console.log(`    API key     ${info.apiKey}`);
   console.log('');
+  if (empty && info.agentPrompt && interactive) {
+    // The setup menu (rendered by the caller) takes it from here.
+    console.log('  Nothing is instrumented yet — your coding agent can wire tracing, flows,');
+    console.log('  and rules for you; then you just run your agent.');
+    if (updateNotice) {
+      console.log('');
+      console.log(`  ${updateNotice}`);
+    }
+    console.log('');
+    return;
+  }
   if (empty && info.agentPrompt) {
     console.log('  Nothing is instrumented yet. Paste this into Claude Code (or any coding');
     console.log('  agent) — it wires tracing, flows, and rules; then just run your agent:');
@@ -146,8 +158,12 @@ const printConnectBlock = (info, port, updateNotice = null, { empty = false } = 
     console.log(`    export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer ${info.apiKey}"`);
   }
   console.log('');
+  // The pasted prompt runs `init` itself — only point a human at it when the
+  // store already has traffic (the prompt path owns the empty-store flow).
   console.log(
-    `  Next: ${paint('glassray-coach init', PALETTE.brand)} in your agent's repo · quickstart ${link(GUIDES.quickstart)}`,
+    empty && info.agentPrompt
+      ? `  Next: paste the prompt above into your coding agent · quickstart ${link(GUIDES.quickstart)}`
+      : `  Next: ${paint('npx @glassray/coach init', PALETTE.brand)} in your agent's repo · quickstart ${link(GUIDES.quickstart)}`,
   );
   if (updateNotice) {
     console.log('');
@@ -164,10 +180,11 @@ const cmdStart = async ({ port, dataDir, noOpen }) => {
     const running = await fetchInfo(port);
     if (running) {
       console.log(`glassray already running on port ${port}`);
-      printConnectBlock(running, port, readUpdateNotice(home), {
-        empty: await storeLooksEmpty(port),
-      });
+      const empty = await storeLooksEmpty(port);
+      const interactive = canOfferOnboarding(empty, running);
+      printConnectBlock(running, port, readUpdateNotice(home), { empty, interactive });
       if (!noOpen) openBrowser(`http://127.0.0.1:${port}/`);
+      if (interactive) await offerOnboarding({ prompt: running.agentPrompt, port, apiKey: running.apiKey });
       return;
     }
     errorLine(`port ${port} is in use by something else — pass --port <n> to pick another`);
@@ -199,11 +216,23 @@ const cmdStart = async ({ port, dataDir, noOpen }) => {
     child.kill('SIGTERM');
     process.exit(1);
   }
-  printConnectBlock(info, port, readUpdateNotice(home), {
-    empty: await storeLooksEmpty(port),
-  });
+  const empty = await storeLooksEmpty(port);
+  const interactive = canOfferOnboarding(empty, info);
+  printConnectBlock(info, port, readUpdateNotice(home), { empty, interactive });
   if (!noOpen) openBrowser(`http://127.0.0.1:${port}/`);
+  // The menu blocks on stdin while the server keeps serving; every path
+  // (Claude run / prompt hand-off / manual wiring) returns here, and the
+  // process then stays attached to the server child as before.
+  if (interactive) await offerOnboarding({ prompt: info.agentPrompt, port, apiKey: info.apiKey });
 };
+
+/**
+ * Offer the interactive setup menu only where a question can actually be
+ * answered: an empty store with a prompt to hand over, a real TTY on both
+ * ends, and not CI. Everything else keeps the print-only behavior.
+ */
+const canOfferOnboarding = (empty, info) =>
+  empty && Boolean(info?.agentPrompt) && Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY) && !process.env.CI;
 
 /** mcp: removed in 0.2 — the CLI (plus the installable skill) is the one agent-facing surface now. */
 const cmdMcp = () => {
