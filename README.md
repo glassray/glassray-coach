@@ -20,9 +20,10 @@ npm i -g @glassray/coach      # …or permanent: `glassray-coach` on your PATH
 glassray-coach start          # (upgrade later when the CLI shows its ▲ notice)
 ```
 
-Either boots the server on `http://127.0.0.1:5899/`, opens the dashboard, and — on a fresh store — prints a
-**paste-into-your-coding-agent prompt** with your live ingest endpoint and local API key baked in. Paste it
-into Claude Code / Codex / Copilot in your agent's repo and it does the whole setup: installs the skill,
+Either boots the server on `http://127.0.0.1:5899/`, opens the dashboard, and — on a fresh store — offers to
+set everything up: **run Claude Code right there** (headless, with `git commit`/`push` hard-blocked, so the
+wiring lands as a diff you review), or take the **paste-into-your-coding-agent prompt** with your live ingest
+endpoint and local API key baked in. Either way your agent does the whole setup: installs the skill,
 discovers your flows and rules from the code (the code discovery needs an analysis model — zero-config with
 Claude Code installed, see [the LLM provider](#the-llm-provider); on `mock` the agent derives them by hand
 instead), wires tracing, and verifies the first trace lands. Then you just run your agent. (The dashboard's
@@ -75,8 +76,9 @@ their run to completion (`--no-wait` / `--timeout`). Full reference:
 
 ## Use it from your coding agent
 
-The fastest path needs no typing at all: on an empty store, `glassray-coach start` (and the dashboard's empty
-state) hands you a **copy-paste onboarding prompt** with the live endpoint and key baked in. Your agent then
+The fastest path needs no typing at all: on an empty store, `glassray-coach start` offers to **run Claude Code
+for you** (or hands you the same onboarding prompt the dashboard's empty state carries, live endpoint and key
+baked in — Codex and Copilot take it as a paste). Your agent then
 verifies the server, runs the code discovery, wires tracing, confirms a trace lands end-to-end, snapshots the
 result with `glassray-coach pull`, and reports its coverage — behaviours found vs instrumented vs skipped.
 
