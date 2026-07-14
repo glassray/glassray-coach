@@ -60,7 +60,7 @@ export const COMMAND_SECTIONS = [
       ['push', 'Reconcile glassray.yaml into the target (--dry-run · --prune)'],
       ['run <flow> --label <x>', "Execute the flow's run recipe; traces land under the label"],
       ['compare <flow> <a> <b>', 'Score the rule suite over two labelled corpora — pass rate + cost delta'],
-      ['check', 'Run every watched rule; exit non-zero on a threshold breach (--fixtures)'],
+      ['check', 'Run every rule; exit non-zero on a threshold breach (--fixtures)'],
       ['link <project>', 'Record the cloud project + auth for pull --from cloud / --traces'],
     ],
   },

@@ -239,7 +239,8 @@ Data + rules:
 | `glassray-coach evals create --deviation <id> [--flow]` | Save a discovered deviation as an authored (**promoted**) rule (idempotent). |
 | `glassray-coach evals update <id> [--flow\|--no-flow --source-file --threshold\|--no-threshold --judge\|--no-judge --autorun-threshold]` | Binding + anchor + gates. |
 | `glassray-coach evals run <id> [--sample --model]` / `delete <id>` | One-off scoring; delete removes verdicts. |
-| `glassray-coach deviations list/get/resolve` · `discovery run` · `fix <id>` | The discovery → fix loop (secondary to the rule loop). |
+| `glassray-coach deviations list/get/resolve/discover` · `fix <id>` | The deviation discovery → fix loop (secondary to the rule loop). `deviations discover [--sample --flow]` clusters recurring failures from recent traces (`discovery run` is an alias). |
+| `glassray-coach experiments list [--flow]` / `get <id>` | Read-only view of the durable compare experiments (create/report live in the dashboard). |
 | `glassray-coach runs list/get/cancel` | Background-run queue visibility. |
 
 Key JSON fields to read:

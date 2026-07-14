@@ -67,7 +67,7 @@ glassray-coach <command> --help
 ```
 
 `start` / `init` / `status` / `doctor` / `reset` manage the server. The data commands — `traces`, `flows`,
-`evals`, `deviations`, `discovery`, `fix`, `runs`, `stats`, `usage`, plus the loop verbs `pull`, `push`,
+`evals`, `deviations` (`discover` runs deviation discovery), `experiments`, `fix`, `runs`, `stats`, `usage`, plus the loop verbs `pull`, `push`,
 `run`, `compare`, `check`, and `link` — talk to a running Coach over loopback and
 print the API's JSON **verbatim** (errors to stderr; exit `0` ok, `1` API error, `2` no server). Long verbs poll
 their run to completion (`--no-wait` / `--timeout`). Full reference:
