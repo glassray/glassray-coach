@@ -22,6 +22,7 @@ import {
   GUIDES,
   PALETTE,
   VERSION,
+  brandHeader,
   bullet,
   compactBrand,
   compareVersions,
@@ -123,7 +124,8 @@ const storeLooksEmpty = async (port) => {
 const printConnectBlock = (info, port, updateNotice = null, { empty = false, interactive = false } = {}) => {
   const dashboard = `http://127.0.0.1:${port}/`;
   console.log('');
-  console.log(`  ${compactBrand()}`);
+  // The same branded header as the landing screen — mark on wide terminals.
+  for (const line of brandHeader('The local AI-agent trace debugger.')) console.log(line);
   console.log('');
   console.log(`  ${bullet('ok')} Coach ${dim(`v${info.version ?? VERSION}`)} is running`);
   console.log(`    Dashboard   ${link(dashboard)}`);
