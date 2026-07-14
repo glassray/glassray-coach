@@ -169,8 +169,8 @@ the "is it cheaper?" number), and latency. Then:
 
 - Regressions → fix the change or accept the trade-off knowingly.
 - Green → commit `glassray.yaml`, the runner, and the inputs; `git push`. Every
-  rule is already active (it autoruns on new traffic and gates `glassray
-  check`); the **git review of `glassray.yaml`** is the approval — there is no
+  rule is already active (it autoruns on new traffic and gates
+  `glassray-coach check`); the **git review of `glassray.yaml`** is the approval — there is no
   in-app promote.
 
 With a linked cloud project the baseline can be production itself:
@@ -222,7 +222,7 @@ The loop (stdout = API JSON; long verbs take `--no-wait --timeout`):
 | `glassray-coach pull [--from local\|cloud] [--out]` | Serialize flows + rules into glassray.yaml. Local-only sections (`run`, fixtures/inputs paths) always survive the pull. `--from cloud` also applies the pulled rules to the local server. |
 | `glassray-coach pull --traces <flow> [-n 30]` | Ingest real cloud traces as the `production` corpus + pin their extracted inputs into `glassray/inputs/<flow>/`. |
 | `glassray-coach pull --as-fixtures [--flow --limit --dir]` | Freeze golden traces for the `check` gate. |
-| `glassray-coach push [--file --dry-run --prune]` | The reverse of `pull`: apply yaml hand-edits / restore a committed file onto a fresh server (plan on stderr; prune = archive extras). |
+| `glassray-coach push [--file --dry-run --prune]` | The reverse of `pull`: apply yaml hand-edits / restore a committed file onto a fresh server (plan on stderr; prune ARCHIVES a flow the file dropped but DELETES a dropped rule — rules have no archived state). |
 | `glassray-coach check [--fixtures --dir --sample --timeout]` | Run every rule; exit 1 on a threshold breach. |
 | `glassray-coach link <project> [--endpoint --token] \| link --show` | Record the cloud project + auth for the cloud pulls. |
 
@@ -239,7 +239,8 @@ Data + rules:
 | `glassray-coach evals create --deviation <id> [--flow]` | Save a discovered deviation as an authored (**promoted**) rule (idempotent). |
 | `glassray-coach evals update <id> [--flow\|--no-flow --source-file --threshold\|--no-threshold --judge\|--no-judge --autorun-threshold]` | Binding + anchor + gates. |
 | `glassray-coach evals run <id> [--sample --model]` / `delete <id>` | One-off scoring; delete removes verdicts. |
-| `glassray-coach deviations list/get/resolve` · `discovery run` · `fix <id>` | The discovery → fix loop (secondary to the rule loop). |
+| `glassray-coach deviations list/get/resolve/discover` · `fix <id>` | The deviation discovery → fix loop (secondary to the rule loop). `deviations discover [--sample --flow]` clusters recurring failures from recent traces (`discovery run` is an alias). |
+| `glassray-coach experiments list [--flow]` / `get <id>` | Read-only view of the durable compare experiments (create/report live in the dashboard). |
 | `glassray-coach runs list/get/cancel` | Background-run queue visibility. |
 
 Key JSON fields to read:

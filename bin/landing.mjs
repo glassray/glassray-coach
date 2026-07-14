@@ -8,17 +8,15 @@ import {
   GUIDES,
   MODE_OUT,
   PALETTE,
-  VERSION,
   bold,
+  brandHeader,
   bullet,
-  compactBrand,
   dim,
   heading,
   link,
   maybeScheduleUpdateRefresh,
   paint,
   readUpdateNotice,
-  renderMark,
 } from './ui.mjs';
 
 /** The management command words dispatched by bin/glassray.mjs (kept here so help can't drift from dispatch). */
@@ -60,7 +58,7 @@ export const COMMAND_SECTIONS = [
       ['push', 'Reconcile glassray.yaml into the target (--dry-run · --prune)'],
       ['run <flow> --label <x>', "Execute the flow's run recipe; traces land under the label"],
       ['compare <flow> <a> <b>', 'Score the rule suite over two labelled corpora — pass rate + cost delta'],
-      ['check', 'Run every watched rule; exit non-zero on a threshold breach (--fixtures)'],
+      ['check', 'Run every rule; exit non-zero on a threshold breach (--fixtures)'],
       ['link <project>', 'Record the cloud project + auth for pull --from cloud / --traces'],
     ],
   },
@@ -142,23 +140,7 @@ export const renderLanding = ({ port, probe, width = 80, updateNotice = null, mo
   const wide = width >= 50;
 
   // Header: mark beside the name/tagline on wide terminals, compact line otherwise.
-  if (wide && mode !== 'plain') {
-    const mark = renderMark(mode);
-    const right = [
-      '',
-      `${bold('g l a s s r a y   c o a c h')}   ${dim(`v${VERSION}`)}`,
-      '',
-      'The local AI-agent trace debugger.',
-      '',
-      '',
-    ];
-    for (let i = 0; i < mark.length; i += 1) {
-      out.push(`  ${mark[i]}      ${right[i] ?? ''}`.trimEnd());
-    }
-  } else {
-    out.push(`  ${compactBrand()}`);
-    out.push('  The local AI-agent trace debugger.');
-  }
+  out.push(...brandHeader('The local AI-agent trace debugger.', { width, mode }));
   out.push('');
 
   // Live status block.

@@ -174,6 +174,20 @@ export const renderMark = (mode = MODE_OUT) => {
 /** The narrow/pipe fallback brand line. */
 export const compactBrand = () => `${paint('◆', PALETTE.acid)} ${bold('glassray coach')} ${dim(`v${VERSION}`)}`;
 
+/**
+ * The branded header lines: the mark beside the wordmark + tagline on wide,
+ * colored terminals; the compact one-liner otherwise. Shared by the landing
+ * screen and `start`'s connect card so the brand renders identically anywhere.
+ */
+export const brandHeader = (tagline, { width = process.stdout.columns ?? 80, mode = MODE_OUT } = {}) => {
+  if (width >= 50 && mode !== 'plain') {
+    const mark = renderMark(mode);
+    const right = ['', `${bold('g l a s s r a y   c o a c h', mode)}   ${dim(`v${VERSION}`, mode)}`, '', tagline, '', ''];
+    return mark.map((line, i) => `  ${line}      ${right[i] ?? ''}`.trimEnd());
+  }
+  return [`  ${compactBrand()}`, `  ${tagline}`];
+};
+
 // ── guide links ──────────────────────────────────────────────────────────────
 
 /** The canonical docs/repo links used by the landing screen, init, and error hints. */
