@@ -4,12 +4,19 @@
  * install-command parser, the repo detector, and the menu's three paths —
  * driven through injected streams and a stubbed runner, no real `claude`.
  */
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createClaudeReducer, detectRepo, offerOnboarding, parseInstall } from '../bin/onboard.mjs';
+import {
+  createClaudeReducer,
+  detectRepo,
+  killActiveClaude,
+  offerOnboarding,
+  parseInstall,
+  runClaude,
+} from '../bin/onboard.mjs';
 
 /** One stream-json line. */
 const line = (obj) => `${JSON.stringify(obj)}\n`;
@@ -74,6 +81,35 @@ describe('detectRepo', () => {
       writeFileSync(path.join(dir, 'glassray.yaml'), 'version: 1\n');
       expect(detectRepo(dir)).toEqual({ tracingSdk: true, artifact: true });
     } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('killActiveClaude', () => {
+  it('is a safe no-op when nothing is running', () => {
+    expect(() => killActiveClaude()).not.toThrow();
+  });
+
+  it('takes down an in-flight headless run', async () => {
+    // A fake `claude` on PATH that ignores its args and sleeps well past the test.
+    const dir = mkdtempSync(path.join(tmpdir(), 'gr-claude-stub-'));
+    const stub = path.join(dir, 'claude');
+    writeFileSync(stub, '#!/bin/sh\nsleep 30\n');
+    chmodSync(stub, 0o755);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${dir}:${savedPath}`;
+    try {
+      const started = Date.now();
+      const pending = runClaude('prompt', dir);
+      await new Promise((r) => setTimeout(r, 150)); // let it spawn
+      killActiveClaude();
+      const result = await pending;
+      expect(Date.now() - started).toBeLessThan(5_000); // killed, not slept out
+      expect(result.code).toBe(0); // signal exit → code null → 0
+      killActiveClaude(); // cleared after exit — still a no-op
+    } finally {
+      process.env.PATH = savedPath;
       rmSync(dir, { recursive: true, force: true });
     }
   });

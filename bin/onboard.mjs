@@ -199,6 +199,18 @@ export const createClaudeReducer = (cwd) => {
   };
 };
 
+/** The in-flight headless Claude, if any — so `start`'s shutdown paths can take it down too. */
+let activeClaude = null;
+
+/**
+ * Kill the in-flight headless Claude, if any. `start` calls this from its
+ * SIGINT/SIGTERM handlers and when the server child dies — a Claude mid-edit
+ * must never outlive the CLI and the server it is wiring against.
+ */
+export const killActiveClaude = () => {
+  if (activeClaude) activeClaude.kill('SIGTERM');
+};
+
 /**
  * Run the user's `claude` on the onboarding prompt in `cwd`, headless. The
  * prompt goes over stdin; stdout is the `stream-json` feed (never shown raw),
@@ -215,6 +227,7 @@ export const runClaude = (prompt, cwd = process.cwd(), onActivity) =>
       shell: onWindows,
       ...(onWindows ? { windowsVerbatimArguments: false } : {}),
     });
+    activeClaude = child;
 
     const reducer = createClaudeReducer(cwd);
     let stdoutBuf = '';
@@ -239,8 +252,12 @@ export const runClaude = (prompt, cwd = process.cwd(), onActivity) =>
       stderrTail = (stderrTail + chunk).slice(-2000); // tail only — explain, never flood
     });
 
-    child.on('error', reject);
+    child.on('error', (err) => {
+      if (activeClaude === child) activeClaude = null;
+      reject(err);
+    });
     child.on('exit', (code) => {
+      if (activeClaude === child) activeClaude = null;
       if (stdoutBuf.trim()) reducer.push(stdoutBuf); // flush a trailing partial line
       if (!sawEvent && stderrTail.trim()) process.stderr.write(stderrTail); // format drift — don't hide Claude
       resolve({ code: code ?? 0, errorTail: stderrTail.trim(), ...reducer.summary() });

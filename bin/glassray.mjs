@@ -17,7 +17,7 @@ import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { MANAGEMENT_COMMANDS, showLanding } from './landing.mjs';
-import { offerOnboarding } from './onboard.mjs';
+import { killActiveClaude, offerOnboarding } from './onboard.mjs';
 import {
   GUIDES,
   PALETTE,
@@ -202,9 +202,20 @@ const cmdStart = async ({ port, dataDir, noOpen }) => {
       stdio: ['ignore', 'inherit', 'inherit'],
     },
   );
-  child.on('exit', (code) => process.exit(code ?? 0));
-  process.on('SIGINT', () => child.kill('SIGINT'));
-  process.on('SIGTERM', () => child.kill('SIGTERM'));
+  // A headless onboarding Claude must never outlive the CLI + server it is
+  // wiring against — take it down on every shutdown path before exiting.
+  child.on('exit', (code) => {
+    killActiveClaude();
+    process.exit(code ?? 0);
+  });
+  process.on('SIGINT', () => {
+    killActiveClaude();
+    child.kill('SIGINT');
+  });
+  process.on('SIGTERM', () => {
+    killActiveClaude();
+    child.kill('SIGTERM');
+  });
 
   // Wait (up to ~20s) for the server to answer, then print the connect card.
   const deadline = Date.now() + 20_000;
