@@ -1,25 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FlowAudit, FlowClassify, FlowDetail as FlowDetailData, FlowMember } from "../api";
 import { deleteFlow, fetchFlow, fetchFlowAudit, isNotFoundError, updateFlow } from "../api";
-import { formatNumber, relativeTime, truncate } from "../format";
+import { formatNumber, relativeTime } from "../format";
 import { SourceChip } from "./Evals";
 import type { SelectorFields } from "./Flows";
 import { ClassifyChip, describeSelector, fieldsToSelector, SelectorFieldsGrid, selectorToFields } from "./Flows";
 
-/** Provenance badge for one membership (selector/llm/manual), with a low-confidence marker. */
+/**
+ * Provenance badge for one membership (selector/llm/manual). LLM assignments
+ * also carry the classifier's confidence (high/low) inline — the per-row signal
+ * that replaced the standalone Audit panel; selector/manual rows have none.
+ */
 const AssignBadge = ({ assignedBy, confidence }: { assignedBy: string; confidence: string | null }) => (
   <>
     <span className={`assign-badge assign-${assignedBy}`}>{assignedBy}</span>
-    {confidence === "low" ? (
-      <span className="confidence-low" title="Low-confidence LLM assignment">
-        low
+    {confidence ? (
+      <span
+        className={`confidence-${confidence}`}
+        title={confidence === "low" ? "Low-confidence LLM assignment" : "High-confidence LLM assignment"}
+      >
+        {confidence}
       </span>
     ) : null}
   </>
 );
 
-/** One member row shared by the members table and the audit sample (optionally with the intent preview). */
-const MemberRow = ({ member, inputPreview }: { member: FlowMember; inputPreview?: string | null }) => (
+/** One member row for the member-traces table (name + agent + received + provenance/confidence). */
+const MemberRow = ({ member }: { member: FlowMember }) => (
   <tr
     className={`row${member.confidence === "low" ? " row-lowconf" : ""}`}
     onClick={() => {
@@ -28,7 +35,6 @@ const MemberRow = ({ member, inputPreview }: { member: FlowMember; inputPreview?
   >
     <td>
       <div className="cell-name">{member.name ?? "Untitled trace"}</div>
-      {inputPreview ? <div className="cell-preview">{truncate(inputPreview, 110)}</div> : null}
     </td>
     <td>{member.agent ? <span className="tag">{member.agent}</span> : <span className="muted">—</span>}</td>
     <td className="muted">{member.receivedAt ? relativeTime(member.receivedAt) : "—"}</td>
@@ -457,45 +463,31 @@ export const FlowDetail = ({ id }: { id: string }) => {
           </table>
         </div>
       )}
-
-      {audit ? (
-        <>
-          <h2 className="section-title">Audit</h2>
-          <p className="muted flow-audit-counts">
-            {formatNumber(audit.counts.members)} members · {formatNumber(audit.counts.lowConfidence)} low-confidence ·{" "}
-            {formatNumber(audit.counts.unclassifiedStoreWide)} unclassified store-wide
-          </p>
-          {audit.lowConfidence.length > 0 ? (
-            <>
-              <h3 className="flow-audit-subtitle">Low-confidence assignments</h3>
-              <div className="table-wrap">
-                <table className="table">
-                  <MemberHead />
-                  <tbody>
-                    {audit.lowConfidence.map((m) => (
-                      <MemberRow key={m.traceId} member={m} inputPreview={m.inputPreview} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          ) : null}
-          {audit.sample.length > 0 ? (
-            <>
-              <h3 className="flow-audit-subtitle">Newest members (sample)</h3>
-              <div className="table-wrap">
-                <table className="table">
-                  <MemberHead />
-                  <tbody>
-                    {audit.sample.map((m) => (
-                      <MemberRow key={m.traceId} member={m} inputPreview={m.inputPreview} />
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          ) : null}
-        </>
+      {/* The members table is capped, so note when it's truncated. Confidence is
+          now inline per row (the `low` amber wash + high/low badge), which is
+          why the standalone Audit panel is gone — and the server always includes
+          every low-confidence assignment here, even past the cap. */}
+      {data.members.length > 0 && data.members.length < data.traceCount ? (
+        <p className="muted flow-members-note">
+          Showing {formatNumber(data.members.length)} of {formatNumber(data.traceCount)} members — the newest, plus
+          every low-confidence assignment.
+        </p>
+      ) : null}
+      {/* Low-confidence count (the audit signal that has no single per-row home):
+          the total across the flow, pointing at the amber-highlighted rows. */}
+      {audit && audit.counts.lowConfidence > 0 ? (
+        <p className="muted flow-members-note">
+          {formatNumber(audit.counts.lowConfidence)} low-confidence{" "}
+          {audit.counts.lowConfidence === 1 ? "assignment" : "assignments"} (highlighted) — worth reviewing.
+        </p>
+      ) : null}
+      {/* The one Audit signal with no per-row home: the store-wide backlog of
+          traces the classify sweep hasn't reached yet. */}
+      {audit && audit.counts.unclassifiedStoreWide > 0 ? (
+        <p className="muted flow-members-note">
+          {formatNumber(audit.counts.unclassifiedStoreWide)}{" "}
+          {audit.counts.unclassifiedStoreWide === 1 ? "trace" : "traces"} store-wide not yet classified into any flow.
+        </p>
       ) : null}
         </div>
         <BuiltFromRail data={data} />

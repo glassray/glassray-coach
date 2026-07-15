@@ -206,6 +206,9 @@ export type FlowMember = {
 /** Cap on members returned in a flow's detail view (newest first). */
 const DETAIL_MEMBER_CAP = 100;
 
+/** Extra cap on low-confidence members surfaced beyond the newest-window (the actionable subset). */
+const DETAIL_LOW_CONF_CAP = 100;
+
 /** An assertion rule attached to a flow, as listed in the flow's detail. */
 export type FlowRuleRef = {
   id: string;
@@ -228,23 +231,35 @@ export const getFlowDetail = async (
   const rows = await db.select().from(flows).where(eq(flows.id, id)).limit(1);
   const flow = rows[0];
   if (!flow) return null;
-  const [members, attachedEvals, counts] = await Promise.all([
+  /** The denormalized member columns the detail table renders (shared by both member reads). */
+  const memberColumns = {
+    traceId: flowTraces.traceId,
+    name: traces.name,
+    agent: traces.agent,
+    status: traces.status,
+    receivedAt: traces.receivedAt,
+    assignedBy: flowTraces.assignedBy,
+    confidence: flowTraces.confidence,
+    assignedAt: flowTraces.assignedAt,
+  };
+  const [newest, lowConf, attachedEvals, counts] = await Promise.all([
     db
-      .select({
-        traceId: flowTraces.traceId,
-        name: traces.name,
-        agent: traces.agent,
-        status: traces.status,
-        receivedAt: traces.receivedAt,
-        assignedBy: flowTraces.assignedBy,
-        confidence: flowTraces.confidence,
-        assignedAt: flowTraces.assignedAt,
-      })
+      .select(memberColumns)
       .from(flowTraces)
       .leftJoin(traces, eq(flowTraces.traceId, traces.id))
       .where(eq(flowTraces.flowId, id))
       .orderBy(desc(flowTraces.assignedAt), desc(flowTraces.traceId))
       .limit(DETAIL_MEMBER_CAP),
+    // Low-confidence assignments are the actionable subset — surface EVERY one
+    // even when it falls outside the newest-window cap, so a stale mis-match on
+    // a busy flow can't become invisible in the dashboard.
+    db
+      .select(memberColumns)
+      .from(flowTraces)
+      .leftJoin(traces, eq(flowTraces.traceId, traces.id))
+      .where(and(eq(flowTraces.flowId, id), eq(flowTraces.confidence, 'low')))
+      .orderBy(desc(flowTraces.assignedAt), desc(flowTraces.traceId))
+      .limit(DETAIL_LOW_CONF_CAP),
     db
       .select({
         id: evals.id,
@@ -260,6 +275,12 @@ export const getFlowDetail = async (
       .orderBy(desc(evals.createdAt)),
     memberCounts(db, [id]),
   ]);
+  // One chronological list: the newest members plus any low-confidence
+  // assignment beyond that window, deduped so nothing actionable is hidden.
+  const shown = new Set(newest.map((m) => m.traceId));
+  const members = [...newest, ...lowConf.filter((m) => !shown.has(m.traceId))].sort(
+    (a, b) => (b.assignedAt?.getTime() ?? 0) - (a.assignedAt?.getTime() ?? 0),
+  );
   return {
     id: flow.id,
     name: flow.name,

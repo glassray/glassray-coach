@@ -313,6 +313,10 @@ a {
   background: var(--muted);
   border: 1px solid var(--border);
   border-radius: 999px;
+  /* A pill is a single token — never let its text wrap to multiple lines inside
+     the rounded border (a long flow name in a narrow column otherwise stacks to
+     3 lines and inflates the whole table row). */
+  white-space: nowrap;
 }
 
 .badge {
@@ -2540,6 +2544,11 @@ a {
   font-size: 0.7rem;
   color: var(--kind-tool);
 }
+.confidence-high {
+  margin-left: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+}
 /* Low-confidence member rows get a faint amber wash + left accent. */
 .row-lowconf td {
   background: color-mix(in srgb, var(--warning) 10%, var(--card));
@@ -2566,23 +2575,21 @@ a {
   max-width: 300px;
 }
 
-/* Audit section: counts line + subsection headings. */
-.flow-audit-counts {
-  margin: -6px 0 10px;
+/* Muted caption(s) under the member-traces table (truncation + unclassified backlog). */
+.flow-members-note {
+  margin: 0.6rem 0 0;
   font-size: 0.82rem;
-}
-.flow-audit-subtitle {
-  margin: 0.75rem 0 0.5rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted-foreground);
 }
 
 /* A tag that navigates (e.g. an eval's flow-binding chip). */
 .tag-link {
   text-decoration: none;
+  /* Cap a long flow name so the nowrap pill can't balloon the Flow column;
+     the full name stays on hover (title attr). */
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 .tag-link:hover {
   background: var(--accent);
@@ -2788,6 +2795,13 @@ a {
 }
 .flow-main {
   min-width: 0;
+}
+/* Consistent vertical rhythm between the stacked sections in the main column
+   (Definition · Rules · Member traces · Audit) — the section headings carry no
+   top margin of their own and the cards/tables no bottom margin, so without
+   this the "Audit" heading butts right up against the members table above it. */
+.flow-main > .section-title {
+  margin-top: 1.75rem;
 }
 /* The rail sticks alongside the (taller) main column on wide screens. */
 .flow-rail {

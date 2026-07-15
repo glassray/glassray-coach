@@ -60,13 +60,23 @@ const anchorArray = () =>
 
 /** One expected behaviour / rule the flow's code enforces, read from the code (== an eval on the target). */
 const ruleSchema = z.object({
-  name: z.string().optional().describe('SHORT plain-language title (3-8 words), e.g. "Retrieve before answering"'),
+  name: z
+    .string()
+    .optional()
+    .describe(
+      'A SHORT, plain-language title for the rule — the scannable headline (3-8 words, e.g. "Retrieve before answering", "Decline empty plans"). Accurate but concise; NOT a full sentence, and NOT just the first words of `text`.',
+    ),
   text: z
     .string()
     .describe(
-      'The rule as ONE plain sentence a non-engineer can read, exactly true to the code (no function names or jargon).',
+      'The rule as ONE plain sentence a non-engineer can read, while staying exactly true to the code — the `snippet` carries the verbatim ground truth, `text` carries the meaning. No function names, constants, or jargon in `text` (e.g. code `if not sources: return DEFAULT_ERROR_MESSAGE` → text "When no retrieved source supports a claim, the answer must refuse instead of asserting it").',
     ),
-  snippet: z.string().optional().describe('The exact code the rule is read from, quoted VERBATIM — omit for control-flow-inferred rules.'),
+  snippet: z
+    .string()
+    .optional()
+    .describe(
+      'The exact code the rule is read from, quoted VERBATIM — a prompt line, a comment, or the enforcing condition/statement (e.g. `if not sources: return DEFAULT_ERROR_MESSAGE`). ONLY when the rule maps to a literal line or two of source; copy it exactly, never paraphrase. OMIT entirely for rules inferred from control flow across multiple places (the anchors are the ground truth there).',
+    ),
   anchors: anchorArray().describe('Where the rule is enforced in the code (file / symbol / line).'),
 });
 
@@ -114,7 +124,7 @@ For each flow, capture:
 - a short name and a one/two-sentence description read from the code,
 - the EXACT agent / node / class names that make it up (these get matched against the agent tags on real traces),
 - concrete code anchors (file + defining symbol, and the line when you know it),
-- its RULES — the explicit expected behaviours the flow's code enforces (must / must-not / ordering / guardrail / validation / branch conditions). Be EXHAUSTIVE and GRANULAR: one rule per directive, never a single summary of several. Treat every "must / must not / always / never / only / do not" and every numbered instruction as its own rule. Think of each rule as a TEST CASE: a specific expected behaviour you could write a pass/fail check for. For EACH rule give a SHORT plain-language title (\`name\`, 3-8 words); the rule as ONE plain sentence a non-engineer can read while staying exactly true to the code (\`text\` — no function names or jargon); the VERBATIM code snippet it's read from when it maps to a literal line or two (\`snippet\`, omit for control-flow-inferred rules); and the enforcing code \`anchors\` (file / symbol / line). Read every rule from what the code ACTUALLY does — never invent; a rule with no real code anchor is a smell. Emit an empty rules list only when the flow's own code genuinely states none.
+- its RULES — the explicit expected behaviours the flow's code enforces (must / must-not / ordering / guardrail / validation / branch conditions). Be EXHAUSTIVE and GRANULAR: one rule per directive, never a single summary of several. A prompt / guardrail block / checklist that states several directives yields ONE rule per directive — treat every "must / must not / always / never / only / do not" and every numbered instruction as its own rule. Think of each rule as a TEST CASE: a specific expected behaviour you could write a pass/fail check for. A prompt with five directives should produce ~five rules, not one. For EACH rule give: a SHORT, plain-language TITLE — the scannable headline (\`name\`, 3-8 words, e.g. "Retrieve before answering", "Decline empty plans"); accurate but concise, NOT a full sentence and NOT just the first words of \`text\`; the rule as ONE plain sentence a non-engineer can read while staying exactly true to the code (\`text\` — no function names or jargon; the snippet carries the ground truth. Code \`if not sources: return DEFAULT_ERROR_MESSAGE\` → text "When no retrieved source supports a claim, the answer must refuse instead of asserting it"); the VERBATIM code snippet it's read from when the rule maps to a literal line or two (\`snippet\` — copy exactly, omit for rules inferred from control flow across places); and the enforcing code \`anchors\` (file / symbol / line). Read every rule from what the code ACTUALLY does — never invent; a rule with no real code anchor is a smell. Emit an empty rules list only when the flow's own code genuinely states none.
 
 ALSO capture the SYSTEM-LEVEL intent (the 'system' object): context (what this product / agent system is and who it's for, from the README / docs — empty string if nothing usable) and rules (SYSTEM-WIDE expectations that apply to every flow — tone / style, global guardrails, out-of-scope — read from the system prompts, anchored where possible). Don't duplicate a per-flow rule here.
 
@@ -181,10 +191,23 @@ const toAnchors = (raw: CodeRule['anchors']): Anchor[] | null => {
   return cleaned.length > 0 ? cleaned : null;
 };
 
-/** Derive a short rule title from its text when the model omitted `name` (first ~7 words). */
+/** Filler words a truncated title must not end on, so a fallback never reads as cut off ("…locked down to only"). */
+const TRAILING_FILLER = new Set([
+  'the', 'a', 'an', 'to', 'of', 'and', 'or', 'for', 'with', 'only', 'that', 'in', 'on', 'by', 'from', 'as', 'is', 'are', 'its', 'their',
+]);
+
+/**
+ * Derive a short rule title from its text when the model omitted `name`: the
+ * first ~8 words, trimmed of trailing punctuation and dangling filler words so
+ * the fallback reads as a headline rather than a sentence chopped mid-phrase.
+ */
 const titleFromText = (text: string): string => {
-  const words = text.replace(/\s+/g, ' ').trim().split(' ').slice(0, 7).join(' ');
-  return words.length > 0 ? words.charAt(0).toUpperCase() + words.slice(1) : 'Rule';
+  const words = text.replace(/\s+/g, ' ').trim().split(' ').slice(0, 8);
+  while (words.length > 3 && TRAILING_FILLER.has(words[words.length - 1].replace(/[^a-z]/gi, '').toLowerCase())) {
+    words.pop();
+  }
+  const title = words.join(' ').replace(/[\s—,:;.-]+$/, '').trim();
+  return title.length > 0 ? title.charAt(0).toUpperCase() + title.slice(1) : 'Rule';
 };
 
 /** What a reconcile produced: how many NEW flows + rules landed on the target. */
