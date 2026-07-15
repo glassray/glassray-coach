@@ -313,6 +313,10 @@ a {
   background: var(--muted);
   border: 1px solid var(--border);
   border-radius: 999px;
+  /* A pill is a single token — never let its text wrap to multiple lines inside
+     the rounded border (a long flow name in a narrow column otherwise stacks to
+     3 lines and inflates the whole table row). */
+  white-space: nowrap;
 }
 
 .badge {
@@ -2580,6 +2584,12 @@ a {
 /* A tag that navigates (e.g. an eval's flow-binding chip). */
 .tag-link {
   text-decoration: none;
+  /* Cap a long flow name so the nowrap pill can't balloon the Flow column;
+     the full name stays on hover (title attr). */
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
 }
 .tag-link:hover {
   background: var(--accent);
