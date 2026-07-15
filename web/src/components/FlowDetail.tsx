@@ -465,10 +465,20 @@ export const FlowDetail = ({ id }: { id: string }) => {
       )}
       {/* The members table is capped, so note when it's truncated. Confidence is
           now inline per row (the `low` amber wash + high/low badge), which is
-          why the standalone Audit panel is gone. */}
+          why the standalone Audit panel is gone — and the server always includes
+          every low-confidence assignment here, even past the cap. */}
       {data.members.length > 0 && data.members.length < data.traceCount ? (
         <p className="muted flow-members-note">
-          Showing the {formatNumber(data.members.length)} newest of {formatNumber(data.traceCount)} members.
+          Showing {formatNumber(data.members.length)} of {formatNumber(data.traceCount)} members — the newest, plus
+          every low-confidence assignment.
+        </p>
+      ) : null}
+      {/* Low-confidence count (the audit signal that has no single per-row home):
+          the total across the flow, pointing at the amber-highlighted rows. */}
+      {audit && audit.counts.lowConfidence > 0 ? (
+        <p className="muted flow-members-note">
+          {formatNumber(audit.counts.lowConfidence)} low-confidence{" "}
+          {audit.counts.lowConfidence === 1 ? "assignment" : "assignments"} (highlighted) — worth reviewing.
         </p>
       ) : null}
       {/* The one Audit signal with no per-row home: the store-wide backlog of
