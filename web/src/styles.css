@@ -2540,6 +2540,11 @@ a {
   font-size: 0.7rem;
   color: var(--kind-tool);
 }
+.confidence-high {
+  margin-left: 0.4rem;
+  font-size: 0.7rem;
+  color: var(--muted-foreground);
+}
 /* Low-confidence member rows get a faint amber wash + left accent. */
 .row-lowconf td {
   background: color-mix(in srgb, var(--warning) 10%, var(--card));
@@ -2566,18 +2571,10 @@ a {
   max-width: 300px;
 }
 
-/* Audit section: counts line + subsection headings. */
-.flow-audit-counts {
-  margin: -6px 0 10px;
+/* Muted caption(s) under the member-traces table (truncation + unclassified backlog). */
+.flow-members-note {
+  margin: 0.6rem 0 0;
   font-size: 0.82rem;
-}
-.flow-audit-subtitle {
-  margin: 1.25rem 0 0.6rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted-foreground);
 }
 
 /* A tag that navigates (e.g. an eval's flow-binding chip). */
