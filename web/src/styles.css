@@ -2572,7 +2572,7 @@ a {
   font-size: 0.82rem;
 }
 .flow-audit-subtitle {
-  margin: 0.75rem 0 0.5rem;
+  margin: 1.25rem 0 0.6rem;
   font-size: 0.82rem;
   font-weight: 600;
   text-transform: uppercase;
@@ -2788,6 +2788,13 @@ a {
 }
 .flow-main {
   min-width: 0;
+}
+/* Consistent vertical rhythm between the stacked sections in the main column
+   (Definition · Rules · Member traces · Audit) — the section headings carry no
+   top margin of their own and the cards/tables no bottom margin, so without
+   this the "Audit" heading butts right up against the members table above it. */
+.flow-main > .section-title {
+  margin-top: 1.75rem;
 }
 /* The rail sticks alongside the (taller) main column on wide screens. */
 .flow-rail {
