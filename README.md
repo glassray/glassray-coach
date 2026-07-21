@@ -1,9 +1,6 @@
 <div align="center">
 
-<img src="https://glassray.ai/docs/images/glassray_cover.jpeg" alt="Glassray Coach" width="640" />
-
-<p><strong>A fully self-contained <em>local</em> AI-agent debugger. One process, one embedded database, zero cloud.</strong><br/>
-See traces land, discover how your agent misbehaves, fix it, and prove the fix held — all on your own machine.</p>
+<img src=".github/assets/hero.png" alt="glassray coach — a fully self-contained local AI-agent debugger" width="820" />
 
 <p>
   <a href="#quickstart">Quickstart</a> ·
@@ -35,9 +32,9 @@ all on your own machine. Coach is the local, try-before-cloud edition of
 
 ## The loop
 
-|            See            |             Map             |               Fix                |            Prove             |
-| :-----------------------: | :-------------------------: | :------------------------------: | :--------------------------: |
-| Traces stream in live as your agent runs; open the span waterfall, replay any LLM call. | A read-only agent maps your flows + rules straight from your source. | Coach writes a fix doc for a deviation; your coding agent applies it. | An experiment reruns the rules — per-rule pass-rate deltas plus cost. |
+<p align="center">
+  <img src=".github/assets/loop.png" alt="See traces land → Map flows from code → Fix with your agent → Prove it held" width="840" />
+</p>
 
 **see** traces land → **map** your agent's flows + rules from its code → **fix** with your coding
 agent → **prove** the change held with an experiment as the rules rerun.
