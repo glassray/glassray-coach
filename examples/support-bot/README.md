@@ -2,7 +2,7 @@
 
 A complete, runnable walkthrough of the Coach loop — **discover → scope as flows →
 codify as flow-scoped evals → fix → watch the reruns happen on their own** — built
-around a simulated customer-support agent for a fictional store. Everything the agent "says" is canned (no API key needed,
+around a simulated customer-support agent for a fictional store, **Nimbus Outfitters**. Everything the agent "says" is canned (no API key needed,
 deterministic), but the instrumentation is the real
 [`@glassray/tracing`](https://github.com/glassray/glassray-tracing-js) SDK — the
 `import` in [`support-bot.mjs`](./support-bot.mjs) is exactly what a production
