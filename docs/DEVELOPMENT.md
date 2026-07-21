@@ -59,6 +59,10 @@ Everything lives under `$GLASSRAY_HOME` (default `~/.glassray`):
 - `local-api-key` — the ingest bearer key (`glsk_local_` + 48 hex), generated once, `chmod 0600`.
 - `update-check.json` — the update-check cache.
 
+Start over with `glassray-coach reset` (`node bin/glassray.mjs reset` from a clone; `--yes` skips the
+confirmation) — it deletes the whole directory, including the ingest key, which is regenerated on the next
+`start`.
+
 The schema is bootstrapped at server start with idempotent `CREATE TABLE IF NOT EXISTS` SQL
 (`server/bootstrap.ts`) — there are no migration files; upgrades are guarded one-time backfills in the same file.
 

@@ -540,16 +540,23 @@ a {
 
 .empty-actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 0.5rem;
   margin-top: 18px;
 }
 
+/* Flatten the runbar so its button sits right beside a sibling button, while any
+ * hint / error / success line wraps onto its own centered row below the pair. */
 .empty-actions .runbar {
-  align-items: center;
+  display: contents;
 }
 
 .empty-actions .runbar-hint,
-.empty-actions .runbar-error {
+.empty-actions .runbar-error,
+.empty-actions .runbar-success {
+  flex-basis: 100%;
+  max-width: 100%; /* a narrower max-width would let the line fit beside the buttons instead of wrapping */
   text-align: center;
 }
 

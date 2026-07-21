@@ -39,8 +39,18 @@ export OTEL_EXPORTER_OTLP_PROTOCOL="http/json"
 export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer glsk_local_..."
 ```
 
-No agent handy? [`examples/support-bot/`](https://github.com/glassray/glassray-coach/tree/main/examples/support-bot) is a full demo with planted failure
-modes and a walkthrough; `node examples/send-otlp.mjs` sends a single sample trace. Something not working?
+No agent handy? The **Nimbus Outfitters** support-bot
+([`examples/support-bot/`](https://github.com/glassray/glassray-coach/tree/main/examples/support-bot)) is a full
+demo with planted failure modes and a walkthrough. Start it from a clone of this repo, with Coach already
+running:
+
+```sh
+npm install && npm run build:ui
+node bin/glassray.mjs start                    # if Coach isn't running yet
+node examples/support-bot/support-bot.mjs      # sends 34 tickets through the buggy Nimbus agent
+```
+
+Or `node examples/send-otlp.mjs` sends a single sample trace. Something not working?
 `glassray-coach doctor`.
 
 ## What you get
@@ -67,7 +77,11 @@ glassray-coach           # branded landing screen: server status, every command,
 glassray-coach <command> --help
 ```
 
-`start` / `init` / `status` / `doctor` / `reset` manage the server. The data commands — `traces`, `flows`,
+`start` / `init` / `status` / `doctor` / `reset` manage the server. `reset` starts you over: it deletes the
+entire data directory (`~/.glassray` unless `GLASSRAY_HOME` / `--data-dir` says otherwise) — traces, flows,
+rules, settings, and the local ingest key — after a confirmation prompt (`--yes` skips it). The next `start`
+boots on a fresh store and mints a new key, so re-point any agent still exporting with the old
+`glsk_local_…` bearer. The data commands — `traces`, `flows`,
 `evals`, `deviations` (`discover` runs deviation discovery), `experiments`, `fix`, `runs`, `stats`, `usage`, plus the loop verbs `pull`, `push`,
 `run`, `compare`, `check`, and `link` — talk to a running Coach over loopback and
 print the API's JSON **verbatim** (errors to stderr; exit `0` ok, `1` API error, `2` no server). Long verbs poll
