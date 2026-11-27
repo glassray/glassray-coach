@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Experiment, FlowSummary } from "../api";
 import { createExperiment, fetchExperiments, fetchFlows, fetchRun, runExperimentReport } from "../api";
+import { formatExperimentCost } from "../../../server/experiment-cost";
 import { relativeTime } from "../format";
 import { DeltaChip } from "./Compare";
 
@@ -23,10 +24,8 @@ export const OutcomeChip = ({ exp }: { exp: Experiment }) => {
 };
 
 /** Compact USD for the cost-delta chip. */
-const money = (usd: number): string => {
-  const v = Number.isFinite(usd) ? usd : 0;
-  const abs = Math.abs(v);
-  const s = abs < 0.01 ? "<$0.01" : `$${abs.toFixed(abs < 1 ? 4 : 2)}`;
+const money = (v: number): string => {
+  const s = formatExperimentCost(Math.abs(v));
   return v < 0 ? `−${s}` : v > 0 ? `+${s}` : "$0";
 };
 
