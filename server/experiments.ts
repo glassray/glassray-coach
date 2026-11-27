@@ -1,6 +1,7 @@
 import { desc, eq, sql } from 'drizzle-orm';
 import type { CoachDb } from './bootstrap.js';
 import { runCompare } from './compare.js';
+import { formatExperimentCost, experimentCostDelta } from './experiment-cost.js';
 import { newId } from './ids.js';
 import { experiments, runs, traces } from './schema.js';
 
@@ -70,12 +71,6 @@ export type ExperimentRecord = {
   concludedAt: Date | null;
 };
 
-/** Compact USD for the prose (compare sides are usually cents). */
-const money = (usd: number): string => {
-  const v = Number.isFinite(usd) ? usd : 0;
-  return v <= 0 ? '$0' : v < 0.01 ? '<$0.01' : `$${v.toFixed(v < 1 ? 4 : 2)}`;
-};
-
 /** Percent from a 0..1 rate, or an em-dash. */
 const pct = (rate: number | null): string => (rate === null ? '—' : `${Math.round(rate * 100)}%`);
 
@@ -94,6 +89,27 @@ export const createExperiment = async (
   return id;
 };
 
+/** Create the cost sentence and numeric delta from the same two price-book totals. */
+const describeCost = (baseline: number, candidate: number) => {
+  const delta = experimentCostDelta(baseline, candidate);
+  const phrase = delta === 0
+    ? `Cost unchanged (${formatExperimentCost(candidate)}).`
+    : `Cost ${delta < 0 ? 'down' : 'up'} ${formatExperimentCost(Math.abs(delta))} (${formatExperimentCost(baseline)} → ${formatExperimentCost(candidate)}).`;
+  return { delta, phrase };
+};
+
+/** Refresh the generated cost suffix while preserving historical rule names and prose. */
+export const displayReport = (report: ExperimentReport | null): ExperimentReport | null => {
+  if (!report || typeof report.summary !== 'string') return report;
+  const baseline = report.compare?.baseline?.estCostIfMeteredUsd;
+  const candidate = report.compare?.candidate?.estCostIfMeteredUsd;
+  if (!Number.isFinite(baseline) || !Number.isFinite(candidate)) return report;
+  const { delta, phrase } = describeCost(baseline, candidate);
+  const suffix = report.summary.lastIndexOf('. Cost ');
+  const summary = suffix < 0 ? report.summary : report.summary.slice(0, suffix + 2) + phrase;
+  return { ...report, summary, costDeltaUsd: delta };
+};
+
 /** Map a raw experiment row to the API record (typing the jsonb `report`). */
 const toRecord = (row: typeof experiments.$inferSelect): ExperimentRecord => ({
   id: row.id,
@@ -103,7 +119,7 @@ const toRecord = (row: typeof experiments.$inferSelect): ExperimentRecord => ({
   baselineLabel: row.baselineLabel,
   candidateLabel: row.candidateLabel,
   runId: row.runId,
-  report: (row.report ?? null) as ExperimentReport | null,
+  report: displayReport((row.report ?? null) as ExperimentReport | null),
   createdAt: row.createdAt,
   concludedAt: row.concludedAt,
 });
@@ -143,18 +159,14 @@ export const newestTwoLabels = async (db: CoachDb): Promise<string[]> => {
 export const buildExperimentReport = (compare: CompareReport): ExperimentReport => {
   const regressed = compare.rules.filter((r) => r.regressed);
   const held = compare.rules.filter((r) => !r.regressed);
-  const costDelta = compare.costIfMeteredDeltaUsd;
-  const costPhrase =
-    costDelta < 0
-      ? `cost down ${money(Math.abs(costDelta))} (${money(compare.baseline.estCostIfMeteredUsd)} → ${money(compare.candidate.estCostIfMeteredUsd)})`
-      : costDelta > 0
-        ? `cost up ${money(costDelta)} (${money(compare.baseline.estCostIfMeteredUsd)} → ${money(compare.candidate.estCostIfMeteredUsd)})`
-        : `cost unchanged (${money(compare.candidate.estCostIfMeteredUsd)})`;
+  const { delta: costDelta, phrase: costPhrase } = describeCost(
+    compare.baseline.estCostIfMeteredUsd, compare.candidate.estCostIfMeteredUsd,
+  );
   const rulesPhrase =
     regressed.length > 0
       ? `${held.length} of ${compare.rules.length} rule(s) held; ${regressed.length} regressed (${regressed.map((r) => r.name).join(', ')})`
       : `all ${compare.rules.length} rule(s) held`;
-  const summary = `${rulesPhrase}. ${costPhrase[0]!.toUpperCase()}${costPhrase.slice(1)}.`;
+  const summary = `${rulesPhrase}. ${costPhrase}`;
   const failing: FailingRule[] = regressed.map((r) => ({
     ruleId: r.id,
     ruleLabel: r.name,

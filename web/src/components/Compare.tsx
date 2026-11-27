@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CompareReport, CorpusRef, FlowSummary, RunStatus, StatsResponse } from "../api";
 import { fetchFlows, fetchLastCompare, fetchStats, runCompare } from "../api";
+import { formatExperimentCost } from "../../../server/experiment-cost";
 import { formatDuration, formatNumber, relativeTime } from "../format";
 import { useRun } from "../useRun";
 import { RunBar } from "./RunBar";
@@ -30,12 +31,6 @@ export const parseCompareReport = (run: RunStatus | null): CompareReport | null 
   const stats = run?.stats;
   if (!stats || !Array.isArray((stats as { rules?: unknown }).rules)) return null;
   return stats as unknown as CompareReport;
-};
-
-/** Compact USD (compare sides are usually cents). Defensive: reports stored by older versions may lack a field. */
-const money = (usd: number | undefined): string => {
-  const v = typeof usd === "number" && Number.isFinite(usd) ? usd : 0;
-  return v <= 0 ? "$0" : v < 0.01 ? "<$0.01" : `$${v.toFixed(v < 1 ? 4 : 2)}`;
 };
 
 /** Percent from a 0..1 rate, or an em-dash. */
@@ -116,7 +111,7 @@ export const CompareReportView = ({ report, flows }: { report: CompareReport; fl
                 className="kpi"
                 title="price-book estimate by each trace's primary model — honest even when the corpus ran on a free provider"
               >
-                <span className="kpi-value mono">{money(s.estCostIfMeteredUsd)}</span>
+                <span className="kpi-value mono">{formatExperimentCost(s.estCostIfMeteredUsd)}</span>
                 <span className="kpi-label">cost if metered</span>
               </div>
               <div className="kpi">
